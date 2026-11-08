@@ -156,6 +156,30 @@ is the value):
 | 24      | `00 (n+3) m 03`             | 4 bytes| `0x24a00` | 16-bit value split into nibbles (`0x20b80`) |
 | 25      | `00 (n+3) m 07`             | 6 bytes| `0x24b50` | `0x20e70` |
 
+Multi-byte values are split into 4-bit nibbles, most significant first
+(`0x20b80`: 4 nibbles for a 16-bit volume; `0x20e70`: 6 nibbles).
+
+Working hypothesis used by `ua101-panel` (**inferred**, to be confirmed by
+ear): `00 (3+bus) ch 03` is the channel VOLUME as a linear 16-bit gain with
+unity (0 dB) at `0x4000`, so `0x7fff` ≈ +6 dB, the top of Roland's fader.
+Bus 0 = MONITOR OUT, 1 = INPUT, 2 = OUTPUT (WAVE); `ch 02` = ON,
+`2·pair 01` = LINK.
+
+### Front-panel status (observed, device)
+
+The unit sends a DT1 on cable 1 whenever a front-panel switch moves (it did
+not answer RQ1 requests in our tests, so the state is unknown until a
+switch moves):
+
+| Address        | Switch                 | Values seen |
+|----------------|------------------------|-------------|
+| `00 01 00 02`  | CLOCK                  | `00`, `09`  |
+| `00 01 00 04`  | DIRECT MONITOR SOFT CTRL | `00`, `01` |
+| `00 01 00 05`  | DIRECT MONITOR MONO    | `00`, `01`  |
+
+The Windows driver parses incoming DT1s by their first address byte
+(`0x1c8c0`: `00`, `01` and `02` blocks).
+
 The panel uses sub-commands 6 and 20–26 for its mixer controls. Which UI
 control maps to which address, and the value ranges, are **not yet known**:
 the plan is to read the device's memory with RQ1 and correlate.

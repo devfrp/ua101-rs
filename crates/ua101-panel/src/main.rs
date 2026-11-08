@@ -6,6 +6,7 @@
 
 mod link;
 mod meters;
+mod theme;
 
 use std::{
     collections::VecDeque,
@@ -30,21 +31,42 @@ use ua101_usb::{
 };
 
 const STRIP_WIDTH: f32 = 40.0;
-/// Fader range until the volume scale is calibrated on hardware.
-const VOLUME_MAX: u16 = 0x7fff;
-const LOG_LINES: usize = 200;
+/// Fader range in dB. The bottom position means -inf (muted).
+const FADER_MIN_DB: f32 = -60.0;
+const FADER_MAX_DB: f32 = 6.0;
+/// Device value for 0 dB. Hypothesis: a linear 16-bit gain with unity at
+/// 0x4000, so the 16-bit maximum 0x7fff sits at +6 dB. Not yet verified on
+/// hardware.
+const VOLUME_UNITY: f32 = 16384.0;
 
-const LED_ON: Color32 = Color32::from_rgb(0x40, 0xe0, 0x40);
-const LED_HOT: Color32 = Color32::from_rgb(0xff, 0x40, 0x30);
-const LED_OFF: Color32 = Color32::from_rgb(0x30, 0x34, 0x30);
-const AMBER: Color32 = Color32::from_rgb(0xff, 0xb0, 0x20);
+/// Converts a fader position in dB to the 16-bit device value.
+fn volume_raw(db: f32) -> u16 {
+    if db <= FADER_MIN_DB {
+        0
+    } else {
+        (VOLUME_UNITY * 10f32.powf(db / 20.0))
+            .round()
+            .clamp(0.0, 32767.0) as u16
+    }
+}
+
+fn format_db(db: f32) -> String {
+    if db <= FADER_MIN_DB {
+        "-∞".into()
+    } else if db.abs() < 0.05 {
+        "0.0".into()
+    } else {
+        format!("{db:+.1}")
+    }
+}
+const LOG_LINES: usize = 200;
 
 fn main() -> eframe::Result {
     env_logger::init();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("UA-101 Control Panel")
-            .with_inner_size([1180.0, 560.0])
+            .with_inner_size([1320.0, 640.0])
             .with_min_inner_size([640.0, 420.0]),
         ..Default::default()
     };
@@ -52,18 +74,29 @@ fn main() -> eframe::Result {
         "UA-101 Control Panel",
         options,
         Box::new(|cc| {
-            cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            cc.egui_ctx.set_theme(egui::Theme::Dark);
+            theme::apply(&cc.egui_ctx);
             Ok(Box::new(Panel::new(cc.egui_ctx.clone())))
         }),
     )
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 struct Strip {
     on: bool,
-    solo: bool,
     pan: i32,
-    volume: u16,
+    /// Fader position in dB (`FADER_MIN_DB` = -inf).
+    volume_db: f32,
+}
+
+impl Default for Strip {
+    fn default() -> Self {
+        Self {
+            on: false,
+            pan: 0,
+            volume_db: 0.0,
+        }
+    }
 }
 
 /// Local mirror of the mixer, indexed by [`Bus::index`]. The unit does not
@@ -126,6 +159,9 @@ struct Panel {
     tone_freq: f64,
     tone_db: f64,
     tone_output: usize,
+    /// OUTPUT TO MAIN switch and the strip states it saved when turned off.
+    outputs_to_main: bool,
+    saved_output_on: Vec<bool>,
 }
 
 impl Panel {
@@ -150,6 +186,8 @@ impl Panel {
             tone_freq: 440.0,
             tone_db: -24.0,
             tone_output: 0,
+            outputs_to_main: true,
+            saved_output_on: Vec::new(),
         };
         p.detect();
         p
@@ -395,28 +433,151 @@ impl Panel {
         });
     }
 
+    fn header(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("UA-101")
+                    .size(18.0)
+                    .strong()
+                    .color(theme::TEXT),
+            );
+            ui.label(
+                RichText::new("Control Panel")
+                    .size(13.0)
+                    .color(theme::TEXT_DIM),
+            );
+            ui.add_space(12.0);
+            self.menu_bar(ui);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if self.link.is_some() {
+                    if ui.button("Disconnect").clicked() {
+                        self.disconnect();
+                        self.status = "Disconnected; the card is back with the OS driver.".into();
+                    }
+                    ui.add_space(8.0);
+                    theme::status_pill(ui, "CONNECTED", theme::GREEN);
+                } else {
+                    let connect =
+                        egui::Button::new(RichText::new("Connect").strong().color(Color32::WHITE))
+                            .fill(theme::BLUE.linear_multiply(0.8));
+                    if ui
+                        .add_enabled(self.device.is_some(), connect)
+                        .on_hover_text(
+                            "Takes the MIDI interface. On Linux this detaches snd-ua101 \
+                             (the card leaves PipeWire/ALSA) until you disconnect.",
+                        )
+                        .clicked()
+                    {
+                        self.connect();
+                    }
+                    let (text, color) = if self.device.is_some() {
+                        ("OFFLINE", theme::TEXT_DIM)
+                    } else {
+                        ("NO DEVICE", theme::RED)
+                    };
+                    ui.add_space(8.0);
+                    theme::status_pill(ui, text, color);
+                }
+                if self.meters.is_some() {
+                    ui.add_space(6.0);
+                    theme::status_pill(ui, "METERS", theme::BLUE);
+                }
+            });
+        });
+    }
+
+    /// OUTPUT TO MAIN: when off, every OUTPUT (WAVE) strip is switched off
+    /// in the monitor mix so playback is not sent straight to the main
+    /// outputs; the per-strip settings come back when it is switched on.
+    fn set_outputs_to_main(&mut self, on: bool) {
+        let idx = Bus::Output.index() as usize;
+        let mut sends = Vec::new();
+        if on {
+            for (ch, st) in self.mixer.strips[idx].iter_mut().enumerate() {
+                st.on = self.saved_output_on.get(ch).copied().unwrap_or(true);
+                sends.push(mixer::set_on(Bus::Output, ch as u8, st.on));
+            }
+        } else {
+            self.saved_output_on = self.mixer.strips[idx].iter().map(|s| s.on).collect();
+            for (ch, st) in self.mixer.strips[idx].iter_mut().enumerate() {
+                st.on = false;
+                sends.push(mixer::set_on(Bus::Output, ch as u8, false));
+            }
+        }
+        self.outputs_to_main = on;
+        self.status = if on {
+            "OUTPUT TO MAIN on: playback is monitored on MONITOR OUT again.".into()
+        } else {
+            "OUTPUT TO MAIN off: playback is no longer sent directly to MONITOR OUT.".into()
+        };
+        for m in sends {
+            self.send(m);
+        }
+    }
+
     fn mixer_ui(&mut self, ui: &mut egui::Ui) {
         let mut sends = Vec::new();
+        let mut toggle_main = None;
         let meters = self.meters.as_ref();
-        // Leave room for labels, buttons and the LINK row under the fader.
-        let fader_height = (ui.available_height() - 230.0).clamp(80.0, 420.0);
+        let metering = meters.is_some();
+        // Room for the strip header, buttons and the LINK row.
+        let fader_height = (ui.available_height() - 250.0).clamp(80.0, 440.0);
         egui::ScrollArea::horizontal().show(ui, |ui| {
             ui.horizontal_top(|ui| {
                 for bus in [Bus::Input, Bus::Output, Bus::MonitorOut] {
+                    let color = theme::section_color(bus);
                     let strips = &mut self.mixer.strips[bus.index() as usize];
                     let links = &mut self.mixer.links[bus.index() as usize];
-                    egui::Frame::group(ui.style()).show(ui, |ui| {
+                    let outputs_off = bus == Bus::Output && !self.outputs_to_main;
+                    theme::card().show(ui, |ui| {
                         ui.vertical(|ui| {
-                            ui.label(
-                                RichText::new(match bus {
-                                    Bus::Input => "INPUT MONITOR",
-                                    Bus::Output => "OUTPUT MONITOR",
-                                    Bus::MonitorOut => "MONITOR OUT",
-                                })
-                                .size(11.0)
-                                .strong(),
-                            );
+                            ui.horizontal(|ui| {
+                                let (r, _) = ui.allocate_exact_size(
+                                    Vec2::new(4.0, 16.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().rect_filled(r, 2.0, color);
+                                ui.label(
+                                    RichText::new(match bus {
+                                        Bus::Input => "INPUT MONITOR",
+                                        Bus::Output => "OUTPUT MONITOR",
+                                        Bus::MonitorOut => "MONITOR OUT",
+                                    })
+                                    .size(12.0)
+                                    .strong(),
+                                );
+                                if bus == Bus::Output {
+                                    ui.add_space(16.0);
+                                    {
+                                        {
+                                            ui.label(
+                                                RichText::new("OUTPUT TO MAIN").size(11.0).color(
+                                                    if self.outputs_to_main {
+                                                        theme::ORANGE
+                                                    } else {
+                                                        theme::TEXT_DIM
+                                                    },
+                                                ),
+                                            );
+                                            let mut on = self.outputs_to_main;
+                                            if ui
+                                                .add(theme::Toggle::new(&mut on, theme::ORANGE))
+                                                .on_hover_text(
+                                                    "Send the computer's outputs (WAVE OUT) \
+                                                     directly to MONITOR OUT. Turn off to keep \
+                                                     playback out of the main mix.",
+                                                )
+                                                .changed()
+                                            {
+                                                toggle_main = Some(on);
+                                            }
+                                        }
+                                    }
+                                }
+                            });
+                            ui.add_space(4.0);
                             ui.horizontal_top(|ui| {
+                                ui.spacing_mut().item_spacing.x = 4.0;
                                 for ch in 0..strips.len() {
                                     let level = match (bus, meters) {
                                         (Bus::Input, Some(m)) => m.level(ch),
@@ -424,9 +585,16 @@ impl Panel {
                                     };
                                     let linked = links[ch / 2];
                                     let mut s = strips[ch];
-                                    let changed =
-                                        strip_ui(ui, bus, ch, &mut s, level, fader_height);
-                                    if let Some(what) = changed {
+                                    let ctx = StripCtx {
+                                        bus,
+                                        ch,
+                                        level,
+                                        metering: metering && bus == Bus::Input,
+                                        fader_height,
+                                        accent: color,
+                                        on_enabled: !outputs_off,
+                                    };
+                                    if let Some(what) = strip_ui(ui, &ctx, &mut s) {
                                         let partner = ch ^ 1;
                                         let mut targets = vec![ch];
                                         if linked && partner < strips.len() {
@@ -440,9 +608,11 @@ impl Panel {
                                                     sends.push(mixer::set_on(bus, t as u8, s.on));
                                                 }
                                                 Change::Volume => {
-                                                    st.volume = s.volume;
+                                                    st.volume_db = s.volume_db;
                                                     sends.push(mixer::set_volume(
-                                                        bus, t as u8, s.volume,
+                                                        bus,
+                                                        t as u8,
+                                                        volume_raw(s.volume_db),
                                                     ));
                                                 }
                                             }
@@ -450,22 +620,24 @@ impl Panel {
                                     }
                                 }
                             });
-                            // LINK buttons, one per pair.
+                            ui.add_space(2.0);
                             ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 4.0;
                                 for (pair, l) in links.iter_mut().enumerate() {
-                                    let r = ui.add_sized(
-                                        Vec2::new(
-                                            STRIP_WIDTH * 2.0 + ui.spacing().item_spacing.x,
-                                            20.0,
-                                        ),
-                                        egui::Button::new(RichText::new("LINK").color(if *l {
-                                            AMBER
-                                        } else {
-                                            Color32::GRAY
-                                        }))
-                                        .selected(*l),
-                                    );
-                                    if r.clicked() {
+                                    let text = RichText::new("LINK").size(10.0).color(if *l {
+                                        Color32::WHITE
+                                    } else {
+                                        theme::TEXT_DIM
+                                    });
+                                    let mut b = egui::Button::new(text);
+                                    if *l {
+                                        b = b.fill(color.linear_multiply(0.7));
+                                    }
+                                    if ui
+                                        .add_sized(Vec2::new(STRIP_WIDTH * 2.0 + 4.0, 20.0), b)
+                                        .on_hover_text("Stereo-link ON and VOLUME of this pair")
+                                        .clicked()
+                                    {
                                         *l = !*l;
                                         sends.push(mixer::set_link(bus, pair as u8, *l));
                                     }
@@ -479,58 +651,65 @@ impl Panel {
         for m in sends {
             self.send(m);
         }
+        if let Some(on) = toggle_main {
+            self.set_outputs_to_main(on);
+        }
     }
 
     fn device_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            for i in 0..self.devices.len().max(1) {
-                let label = format!("{}", i + 1);
-                if ui.selectable_label(self.selected == i, label).clicked() && i != self.selected {
-                    self.selected = i;
-                    self.detect();
-                }
-            }
-            ui.separator();
+            ui.vertical(|ui| {
+                ui.label(RichText::new("DEVICE").size(9.0).color(theme::TEXT_DIM));
+                ui.horizontal(|ui| {
+                    for i in 0..self.devices.len().max(1) {
+                        if ui
+                            .selectable_label(self.selected == i, format!(" {} ", i + 1))
+                            .clicked()
+                            && i != self.selected
+                        {
+                            self.selected = i;
+                            self.detect();
+                        }
+                    }
+                });
+            });
+            ui.add_space(8.0);
             let rate = self
                 .device
                 .as_ref()
                 .map(|d| format!("{:.1} kHz", d.sample_rate() as f64 / 1000.0))
-                .unwrap_or_else(|| "—".into());
-            panel_box(ui, "SAMPLE RATE", &rate);
+                .unwrap_or_else(|| "--.- kHz".into());
+            theme::lcd(ui, "SAMPLE RATE", &rate);
             let clock = if self.front.clock.is_some() {
                 self.front.clock_label()
             } else {
-                "—"
+                "--------"
             };
-            panel_box(ui, "CLOCK", clock);
-            ui.separator();
+            theme::lcd(ui, "CLOCK", clock);
+            ui.add_space(8.0);
             ui.vertical(|ui| {
-                ui.label(RichText::new("DIRECT MONITOR").small());
+                ui.label(
+                    RichText::new("DIRECT MONITOR")
+                        .size(9.0)
+                        .color(theme::TEXT_DIM),
+                );
                 ui.horizontal(|ui| {
-                    lamp(ui, "MONO", self.front.mono);
-                    lamp(ui, "SOFT CTRL", self.front.soft_ctrl);
+                    let hint = "Unknown until the switch moves (the unit reports changes only)";
+                    let r = theme::lamp(ui, "MONO", self.front.mono, theme::YELLOW);
+                    if self.front.mono.is_none() {
+                        r.on_hover_text(hint);
+                    }
+                    let r = theme::lamp(ui, "SOFT CTRL", self.front.soft_ctrl, theme::GREEN);
+                    if self.front.soft_ctrl.is_none() {
+                        r.on_hover_text(hint);
+                    }
                 });
             });
-            ui.separator();
-            if self.link.is_some() {
-                if ui.button("DISCONNECT").clicked() {
-                    self.disconnect();
-                    self.status = "Disconnected; the card is back with the OS driver.".into();
-                }
-            } else if ui
-                .add_enabled(self.device.is_some(), egui::Button::new("CONNECT"))
-                .on_hover_text(
-                    "Takes the MIDI interface. On Linux this detaches snd-ua101 \
-                     (the card leaves PipeWire/ALSA) until you disconnect.",
-                )
-                .clicked()
-            {
-                self.connect();
-            }
             if self.front.soft_ctrl == Some(false) {
+                ui.add_space(8.0);
                 ui.colored_label(
-                    AMBER,
-                    "SOFT CTRL is off: the unit ignores software monitor control",
+                    theme::YELLOW,
+                    "SOFT CTRL is off: the unit ignores monitor control from the computer",
                 );
             }
         });
@@ -717,47 +896,49 @@ enum Change {
     Volume,
 }
 
-/// Draws one channel strip; returns what the user changed.
-fn strip_ui(
-    ui: &mut egui::Ui,
+struct StripCtx {
     bus: Bus,
     ch: usize,
-    s: &mut Strip,
     level: f32,
+    metering: bool,
     fader_height: f32,
-) -> Option<Change> {
+    accent: Color32,
+    on_enabled: bool,
+}
+
+/// Draws one channel strip; returns what the user changed.
+fn strip_ui(ui: &mut egui::Ui, c: &StripCtx, s: &mut Strip) -> Option<Change> {
     let mut change = None;
     let button = Vec2::new(STRIP_WIDTH - 6.0, 20.0);
-    ui.allocate_ui_with_layout(
-        Vec2::new(STRIP_WIDTH, fader_height + 170.0),
-        egui::Layout::top_down(egui::Align::Center),
-        |ui| {
-            ui.set_width(STRIP_WIDTH);
-            ui.spacing_mut().item_spacing.y = 4.0;
-            let name = match bus {
-                Bus::MonitorOut => if ch == 0 { "L" } else { "R" }.to_string(),
-                _ => format!("{}", ch + 1),
+    theme::strip_frame().show(ui, |ui| {
+        ui.set_width(STRIP_WIDTH - 6.0);
+        ui.vertical_centered(|ui| {
+            ui.spacing_mut().item_spacing.y = 5.0;
+            ui.spacing_mut().button_padding = Vec2::new(2.0, 2.0);
+            let name = match c.bus {
+                Bus::MonitorOut => if c.ch == 0 { "L" } else { "R" }.to_string(),
+                _ => format!("{}", c.ch + 1),
             };
-            ui.label(RichText::new(name).strong());
+            ui.label(RichText::new(name).size(13.0).strong().color(c.accent));
 
-            let color = if level > 0.89 {
-                LED_HOT
-            } else if level > 0.003 {
-                LED_ON
+            let on_text = RichText::new("ON").size(10.0).strong().color(if s.on {
+                Color32::BLACK
             } else {
-                LED_OFF
+                theme::TEXT_DIM
+            });
+            let mut on_btn = egui::Button::new(on_text).min_size(button);
+            if s.on {
+                on_btn = on_btn.fill(theme::GREEN);
+            }
+            let hover = if c.on_enabled {
+                "Monitor ON/OFF (address inferred: 00 0b ch 02)"
+            } else {
+                "OUTPUT TO MAIN is off"
             };
-            let (rect, _) = ui.allocate_exact_size(Vec2::new(12.0, 12.0), egui::Sense::hover());
-            ui.painter().circle_filled(rect.center(), 5.0, color);
-            ui.label(RichText::new("SIGNAL").size(8.0));
-
-            let on_text =
-                RichText::new("ON")
-                    .size(11.0)
-                    .color(if s.on { LED_ON } else { Color32::GRAY });
             if ui
-                .add_sized(button, egui::Button::new(on_text).selected(s.on))
-                .on_hover_text("MONITOR on/off (address inferred: 00 0b ch 02)")
+                .add_enabled(c.on_enabled, on_btn)
+                .on_hover_text(hover)
+                .on_disabled_hover_text(hover)
                 .clicked()
             {
                 s.on = !s.on;
@@ -765,9 +946,7 @@ fn strip_ui(
             }
             ui.add_enabled(
                 false,
-                egui::Button::new(RichText::new("SOLO").size(8.5))
-                    .selected(s.solo)
-                    .min_size(button),
+                egui::Button::new(RichText::new("SOLO").size(9.0)).min_size(button),
             )
             .on_disabled_hover_text("SOLO address not identified yet");
             ui.add_enabled(
@@ -782,57 +961,49 @@ fn strip_ui(
             )
             .on_disabled_hover_text("PAN address not identified yet");
 
-            let mut v = s.volume;
-            ui.spacing_mut().slider_width = fader_height;
-            ui.add(
-                egui::Slider::new(&mut v, 0..=VOLUME_MAX)
-                    .vertical()
-                    .show_value(false),
-            )
-            .on_hover_text(format!(
-                "VOLUME raw {v:#06x} (scale not calibrated; address 00 0b ch 03)"
-            ));
-            if v != s.volume {
-                s.volume = v;
+            let mut db = s.volume_db;
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                theme::meter(ui, c.fader_height, c.level, c.metering);
+                ui.spacing_mut().slider_width = c.fader_height;
+                let r = ui
+                    .add(
+                        egui::Slider::new(&mut db, FADER_MIN_DB..=FADER_MAX_DB)
+                            .vertical()
+                            .show_value(false),
+                    )
+                    .on_hover_text(format!(
+                        "VOLUME {} dB (device value {:#06x}, unity 0x4000 assumed). \
+                         Double-click: 0 dB",
+                        format_db(db),
+                        volume_raw(db)
+                    ));
+                if r.double_clicked() {
+                    db = 0.0;
+                }
+                // Snap to 0 dB near unity, like a detented fader.
+                if r.dragged() && db.abs() < 0.4 {
+                    db = 0.0;
+                }
+            });
+            if (db - s.volume_db).abs() > f32::EPSILON {
+                s.volume_db = db;
                 change = Some(Change::Volume);
             }
+            let color = if db > 0.05 {
+                theme::YELLOW
+            } else {
+                theme::TEXT_DIM
+            };
             ui.label(
-                RichText::new(format!("{:.0}%", v as f32 * 100.0 / VOLUME_MAX as f32)).size(9.0),
+                RichText::new(format_db(db))
+                    .size(10.0)
+                    .monospace()
+                    .color(color),
             );
-        },
-    );
+        });
+    });
     change
-}
-
-fn panel_box(ui: &mut egui::Ui, title: &str, value: &str) {
-    ui.vertical(|ui| {
-        ui.label(RichText::new(title).small());
-        egui::Frame::new()
-            .fill(Color32::from_rgb(0x10, 0x18, 0x10))
-            .inner_margin(4.0)
-            .show(ui, |ui| {
-                ui.label(RichText::new(value).monospace().color(LED_ON));
-            });
-    });
-}
-
-fn lamp(ui: &mut egui::Ui, label: &str, state: Option<bool>) {
-    let color = match state {
-        Some(true) => AMBER,
-        Some(false) => LED_OFF,
-        None => Color32::from_gray(0x50),
-    };
-    ui.horizontal(|ui| {
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(12.0, 12.0), egui::Sense::hover());
-        ui.painter().circle_filled(rect.center(), 5.0, color);
-        ui.label(label);
-    })
-    .response
-    .on_hover_text(match state {
-        None => "Unknown until the switch moves (the unit reports changes only)",
-        Some(true) => "On",
-        Some(false) => "Off",
-    });
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -857,26 +1028,50 @@ impl eframe::App for Panel {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_link();
         let ctx = ui.ctx().clone();
-        egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
-        egui::Panel::bottom("status").show(ui, |ui| {
-            ui.label(&self.status);
-        });
-        egui::Panel::bottom("device").show(ui, |ui| {
-            ui.add_space(4.0);
-            self.device_panel(ui);
-            ui.add_space(4.0);
-        });
-        egui::CentralPanel::default().show(ui, |ui| {
-            if self.device.is_none() {
-                ui.centered_and_justified(|ui| {
-                    if ui.button("No UA-101 found — Rescan").clicked() {
-                        self.detect();
-                    }
-                });
-                return;
-            }
-            self.mixer_ui(ui);
-        });
+        egui::Panel::top("header")
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::BG)
+                    .inner_margin(egui::Margin::symmetric(12, 8)),
+            )
+            .show(ui, |ui| self.header(ui));
+        egui::Panel::bottom("status")
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::BG)
+                    .inner_margin(egui::Margin::symmetric(12, 4)),
+            )
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new(&self.status)
+                        .size(11.0)
+                        .color(theme::TEXT_DIM),
+                );
+            });
+        egui::Panel::bottom("device")
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::PANEL)
+                    .inner_margin(egui::Margin::symmetric(12, 8)),
+            )
+            .show(ui, |ui| self.device_panel(ui));
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::PANEL)
+                    .inner_margin(egui::Margin::same(10)),
+            )
+            .show(ui, |ui| {
+                if self.device.is_none() {
+                    ui.centered_and_justified(|ui| {
+                        if ui.button("No UA-101 found — Rescan").clicked() {
+                            self.detect();
+                        }
+                    });
+                    return;
+                }
+                self.mixer_ui(ui);
+            });
         self.dialogs(&ctx);
     }
 }
