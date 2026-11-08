@@ -15,10 +15,10 @@ checked against the descriptors of a real unit. See [`docs/protocol.md`](docs/pr
 | Direct monitoring (experimental) | ✅    | ✅    | ✅      |
 | MIDI in/out                      | ✅    | ✅    | ✅      |
 | Audio, 10 outputs / 12 inputs    | ✅ (usbfs) | 🚧 IOKit isoch | 🚧 WinUSB isoch |
-| System audio device (`ua101d` driver daemon) | ✅ (snd-aloop) | 🚧 | 🚧 |
+| System audio device (`ua101d` driver daemon) | 🧪 written, hardware test pending | 🚧 | 🚧 |
 | Mixer / device panel (Roland SysEx)           | ✅ (addresses partly inferred) | ✅ | ✅ |
 
-✅ implemented · 🚧 to do. On Linux, 12-channel recording has been verified
+✅ implemented · 🧪 implemented, not yet verified on hardware · 🚧 to do. On Linux, 12-channel recording has been verified
 on a real unit at 44.1 kHz. Audible playback is still to be verified (see
 *Open questions* in `docs/protocol.md`).
 
