@@ -4,8 +4,8 @@ A **cross-platform Rust driver** for the **Roland / EDIROL UA-101** USB
 audio interface. Roland no longer ships up-to-date drivers for it.
 
 It runs entirely in user space and contains no C code. The protocol was
-reconstructed by static analysis of Roland's original Windows driver, then checked against the descriptors
-of a real unit. See [`docs/protocol.md`](docs/protocol.md).
+reconstructed by static analysis of Roland's original Windows driver, then
+checked against the descriptors of a real unit. See [`docs/protocol.md`](docs/protocol.md).
 
 ## Status
 
