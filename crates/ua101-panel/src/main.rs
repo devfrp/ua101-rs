@@ -36,20 +36,26 @@ const STRIP_WIDTH: f32 = 40.0;
 /// Fader range in dB. The bottom position means -inf (muted).
 const FADER_MIN_DB: f32 = -60.0;
 const FADER_MAX_DB: f32 = 6.0;
-/// Device value for 0 dB. Hypothesis: a linear 16-bit gain with unity at
-/// 0x4000, so the 16-bit maximum 0x7fff sits at +6 dB. Not yet verified on
-/// hardware.
-const VOLUME_UNITY: f32 = 16384.0;
+/// Device value for 0 dB. Hypothesis: a linear 24-bit gain with unity at
+/// 0x800000, so the 24-bit maximum 0xffffff sits at +6 dB. Not yet
+/// verified on hardware.
+const VOLUME_UNITY: f32 = 8_388_608.0;
 
-/// Converts a fader position in dB to the 16-bit device value.
-fn volume_raw(db: f32) -> u16 {
+/// Converts a fader position in dB to the 24-bit device value.
+fn volume_raw(db: f32) -> u32 {
     if db <= FADER_MIN_DB {
         0
     } else {
         (VOLUME_UNITY * 10f32.powf(db / 20.0))
             .round()
-            .clamp(0.0, 32767.0) as u16
+            .clamp(0.0, 16_777_215.0) as u32
     }
+}
+
+/// Converts a pan position (-64 = left, 0 = centre, +63 = right) to the
+/// 16-bit device value; centre `0x4000` was confirmed on hardware.
+fn pan_raw(pan: i32) -> u16 {
+    (mixer::PAN_CENTER as i32 + pan * 256).clamp(0, 0x7fff) as u16
 }
 
 fn format_db(db: f32) -> String {
@@ -161,9 +167,6 @@ struct Panel {
     tone_freq: f64,
     tone_db: f64,
     tone_output: usize,
-    /// OUTPUT TO MAIN switch and the strip states it saved when turned off.
-    outputs_to_main: bool,
-    saved_output_on: Vec<bool>,
     /// Connection to `ua101d`, when it runs. The panel then never takes
     /// the device itself.
     #[cfg(unix)]
@@ -196,8 +199,6 @@ impl Panel {
             tone_freq: 440.0,
             tone_db: -24.0,
             tone_output: 0,
-            outputs_to_main: true,
-            saved_output_on: Vec::new(),
             #[cfg(unix)]
             daemon: None,
             daemon_connected: false,
@@ -324,8 +325,14 @@ impl Panel {
                     *l = d[0] != 0;
                 }
             }
-            mixer::slot::VOLUME if d.len() >= 4 => {
-                let raw = mixer::from_nibbles(&d[..4]) as f32;
+            mixer::slot::PAN if d.len() >= 4 => {
+                let raw = mixer::from_nibbles(&d[..4]) as i32;
+                if let Some(s) = self.mixer.strips[bus].get_mut(ch) {
+                    s.pan = ((raw - mixer::PAN_CENTER as i32) / 256).clamp(-64, 63);
+                }
+            }
+            mixer::slot::VOLUME if d.len() >= 6 => {
+                let raw = mixer::from_nibbles(&d[..6]) as f32;
                 if let Some(s) = self.mixer.strips[bus].get_mut(ch) {
                     s.volume_db = if raw <= 0.0 {
                         FADER_MIN_DB
@@ -625,29 +632,18 @@ impl Panel {
         });
     }
 
-    /// OUTPUT TO MAIN: when off, every OUTPUT (WAVE) strip is switched off
-    /// in the monitor mix so playback is not sent straight to the main
-    /// outputs; the per-strip settings come back when it is switched on.
-    fn set_outputs_to_main(&mut self, on: bool) {
+    /// Sends every OUTPUT (WAVE) strip to MONITOR OUT, or none of them.
+    fn set_all_main(&mut self, on: bool) {
         let idx = Bus::Output.index() as usize;
         let mut sends = Vec::new();
-        if on {
-            for (ch, st) in self.mixer.strips[idx].iter_mut().enumerate() {
-                st.on = self.saved_output_on.get(ch).copied().unwrap_or(true);
-                sends.push(mixer::set_on(Bus::Output, ch as u8, st.on));
-            }
-        } else {
-            self.saved_output_on = self.mixer.strips[idx].iter().map(|s| s.on).collect();
-            for (ch, st) in self.mixer.strips[idx].iter_mut().enumerate() {
-                st.on = false;
-                sends.push(mixer::set_on(Bus::Output, ch as u8, false));
-            }
+        for (ch, st) in self.mixer.strips[idx].iter_mut().enumerate() {
+            st.on = on;
+            sends.push(mixer::set_on(Bus::Output, ch as u8, on));
         }
-        self.outputs_to_main = on;
         self.status = if on {
-            "OUTPUT TO MAIN on: playback is monitored on MONITOR OUT again.".into()
+            "All outputs are sent to MONITOR OUT.".into()
         } else {
-            "OUTPUT TO MAIN off: playback is no longer sent directly to MONITOR OUT.".into()
+            "No output is sent to MONITOR OUT.".into()
         };
         for m in sends {
             self.send(m);
@@ -669,7 +665,6 @@ impl Panel {
                     let color = theme::section_color(bus);
                     let strips = &mut self.mixer.strips[bus.index() as usize];
                     let links = &mut self.mixer.links[bus.index() as usize];
-                    let outputs_off = bus == Bus::Output && !self.outputs_to_main;
                     theme::card().show(ui, |ui| {
                         ui.vertical(|ui| {
                             ui.horizontal(|ui| {
@@ -689,30 +684,22 @@ impl Panel {
                                 );
                                 if bus == Bus::Output {
                                     ui.add_space(16.0);
+                                    ui.label(
+                                        RichText::new("TO MAIN:").size(10.0).color(theme::TEXT_DIM),
+                                    );
+                                    if ui
+                                        .small_button("ALL")
+                                        .on_hover_text("Send every output to MONITOR OUT")
+                                        .clicked()
                                     {
-                                        {
-                                            ui.label(
-                                                RichText::new("OUTPUT TO MAIN").size(11.0).color(
-                                                    if self.outputs_to_main {
-                                                        theme::ORANGE
-                                                    } else {
-                                                        theme::TEXT_DIM
-                                                    },
-                                                ),
-                                            );
-                                            let mut on = self.outputs_to_main;
-                                            if ui
-                                                .add(theme::Toggle::new(&mut on, theme::ORANGE))
-                                                .on_hover_text(
-                                                    "Send the computer's outputs (WAVE OUT) \
-                                                     directly to MONITOR OUT. Turn off to keep \
-                                                     playback out of the main mix.",
-                                                )
-                                                .changed()
-                                            {
-                                                toggle_main = Some(on);
-                                            }
-                                        }
+                                        toggle_main = Some(true);
+                                    }
+                                    if ui
+                                        .small_button("NONE")
+                                        .on_hover_text("Keep every output out of MONITOR OUT")
+                                        .clicked()
+                                    {
+                                        toggle_main = Some(false);
                                     }
                                 }
                             });
@@ -741,7 +728,6 @@ impl Panel {
                                                 || (bus == Bus::Output && daemon_meters)),
                                         fader_height,
                                         accent: color,
-                                        on_enabled: !outputs_off,
                                     };
                                     if let Some(what) = strip_ui(ui, &ctx, &mut s) {
                                         let partner = ch ^ 1;
@@ -764,6 +750,16 @@ impl Panel {
                                                         volume_raw(s.volume_db),
                                                     ));
                                                 }
+                                                // Pan is per channel even when linked.
+                                                Change::Pan if t == ch => {
+                                                    st.pan = s.pan;
+                                                    sends.push(mixer::set_pan(
+                                                        bus,
+                                                        t as u8,
+                                                        pan_raw(s.pan),
+                                                    ));
+                                                }
+                                                Change::Pan => {}
                                             }
                                         }
                                     }
@@ -801,7 +797,7 @@ impl Panel {
             self.send(m);
         }
         if let Some(on) = toggle_main {
-            self.set_outputs_to_main(on);
+            self.set_all_main(on);
         }
     }
 
@@ -1043,6 +1039,7 @@ impl Panel {
 #[derive(Clone, Copy)]
 enum Change {
     On,
+    Pan,
     Volume,
 }
 
@@ -1053,7 +1050,6 @@ struct StripCtx {
     metering: bool,
     fader_height: f32,
     accent: Color32,
-    on_enabled: bool,
 }
 
 /// Draws one channel strip; returns what the user changed.
@@ -1071,26 +1067,30 @@ fn strip_ui(ui: &mut egui::Ui, c: &StripCtx, s: &mut Strip) -> Option<Change> {
             };
             ui.label(RichText::new(name).size(13.0).strong().color(c.accent));
 
-            let on_text = RichText::new("ON").size(10.0).strong().color(if s.on {
+            // On OUTPUT strips this button sends the output to MONITOR OUT.
+            let (label, lit, hover) = if c.bus == Bus::Output {
+                (
+                    "MAIN",
+                    theme::ORANGE,
+                    "Send this output (WAVE OUT) to MONITOR OUT (00 05 ch 02)",
+                )
+            } else {
+                (
+                    "ON",
+                    theme::GREEN,
+                    "Monitor ON/OFF (address inferred: 00 0b ch 02)",
+                )
+            };
+            let on_text = RichText::new(label).size(10.0).strong().color(if s.on {
                 Color32::BLACK
             } else {
                 theme::TEXT_DIM
             });
             let mut on_btn = egui::Button::new(on_text).min_size(button);
             if s.on {
-                on_btn = on_btn.fill(theme::GREEN);
+                on_btn = on_btn.fill(lit);
             }
-            let hover = if c.on_enabled {
-                "Monitor ON/OFF (address inferred: 00 0b ch 02)"
-            } else {
-                "OUTPUT TO MAIN is off"
-            };
-            if ui
-                .add_enabled(c.on_enabled, on_btn)
-                .on_hover_text(hover)
-                .on_disabled_hover_text(hover)
-                .clicked()
-            {
+            if ui.add(on_btn).on_hover_text(hover).clicked() {
                 s.on = !s.on;
                 change = Some(Change::On);
             }
@@ -1099,17 +1099,26 @@ fn strip_ui(ui: &mut egui::Ui, c: &StripCtx, s: &mut Strip) -> Option<Change> {
                 egui::Button::new(RichText::new("SOLO").size(9.0)).min_size(button),
             )
             .on_disabled_hover_text("SOLO address not identified yet");
-            ui.add_enabled(
-                false,
-                egui::DragValue::new(&mut s.pan)
-                    .range(-64..=63)
-                    .custom_formatter(|v, _| match v as i32 {
-                        0 => "C".into(),
-                        v if v < 0 => format!("L{}", -v),
-                        v => format!("R{v}"),
-                    }),
-            )
-            .on_disabled_hover_text("PAN address not identified yet");
+            let mut pan = s.pan;
+            let r = ui
+                .add(
+                    egui::DragValue::new(&mut pan)
+                        .range(-64..=63)
+                        .speed(0.5)
+                        .custom_formatter(|v, _| match v as i32 {
+                            0 => "C".into(),
+                            v if v < 0 => format!("L{}", -v),
+                            v => format!("R{v}"),
+                        }),
+                )
+                .on_hover_text("PAN: drag left/right, double-click to centre (00 0b ch 03)");
+            if r.double_clicked() {
+                pan = 0;
+            }
+            if pan != s.pan {
+                s.pan = pan;
+                change = Some(Change::Pan);
+            }
 
             let mut db = s.volume_db;
             ui.horizontal(|ui| {
@@ -1123,7 +1132,7 @@ fn strip_ui(ui: &mut egui::Ui, c: &StripCtx, s: &mut Strip) -> Option<Change> {
                             .show_value(false),
                     )
                     .on_hover_text(format!(
-                        "VOLUME {} dB (device value {:#06x}, unity 0x4000 assumed). \
+                        "VOLUME {} dB (device value {:#08x}, unity 0x800000 assumed; 00 0b ch 07). \
                          Double-click: 0 dB",
                         format_db(db),
                         volume_raw(db)

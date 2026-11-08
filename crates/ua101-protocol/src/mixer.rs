@@ -66,12 +66,14 @@ impl Bus {
 pub mod slot {
     /// Stereo link of the pair starting at this (even) channel.
     pub const LINK: u8 = 0x01;
-    /// Monitor ON/OFF.
+    /// Monitor ON/OFF (for OUTPUT strips: send this output to MONITOR OUT).
     pub const ON: u8 = 0x02;
-    /// Volume, 16-bit, sent as 4 nibbles.
-    pub const VOLUME: u8 = 0x03;
-    /// 24-bit parameter sent as 6 nibbles (pan or pan/solo pair).
-    pub const WIDE: u8 = 0x07;
+    /// Pan / balance, 16-bit, sent as 4 nibbles. **Observed on hardware**:
+    /// sweeping it moves the channel between left and right; `0x4000` is
+    /// the centre.
+    pub const PAN: u8 = 0x03;
+    /// Volume, 24-bit, sent as 6 nibbles (inferred).
+    pub const VOLUME: u8 = 0x07;
 }
 
 /// Splits `value` into `N` nibbles, most significant first, as the driver
@@ -108,18 +110,23 @@ pub fn set_link(bus: Bus, pair: u8, linked: bool) -> Message {
     sysex::dt1(channel_address(bus, pair * 2, slot::LINK), &[linked as u8])
 }
 
-/// Channel volume (driver sub-command 24). The scale is not known yet.
-pub fn set_volume(bus: Bus, channel: u8, value: u16) -> Message {
+/// Centre position of [`set_pan`].
+pub const PAN_CENTER: u16 = 0x4000;
+
+/// Channel pan / balance (driver sub-command 24): `0x0000` full left,
+/// [`PAN_CENTER`], up to `0x7fff` full right.
+pub fn set_pan(bus: Bus, channel: u8, value: u16) -> Message {
     sysex::dt1(
-        channel_address(bus, channel, slot::VOLUME),
+        channel_address(bus, channel, slot::PAN),
         &nibbles::<4>(value as u32),
     )
 }
 
-/// 24-bit channel parameter at slot `07` (driver sub-command 25).
-pub fn set_wide(bus: Bus, channel: u8, value: u32) -> Message {
+/// Channel volume, 24-bit (driver sub-command 25). The scale is not
+/// confirmed yet.
+pub fn set_volume(bus: Bus, channel: u8, value: u32) -> Message {
     sysex::dt1(
-        channel_address(bus, channel, slot::WIDE),
+        channel_address(bus, channel, slot::VOLUME),
         &nibbles::<6>(value & 0x00ff_ffff),
     )
 }
@@ -217,19 +224,23 @@ mod tests {
 
     #[test]
     fn channel_addresses() {
-        let m = set_volume(Bus::Input, 3, 0x7fff);
+        let m = set_pan(Bus::Input, 3, 0x7fff);
         let d = parse_dt1(m.as_bytes()).unwrap();
         assert_eq!(d.address, [0x00, 0x04, 0x03, 0x03]);
         assert_eq!(d.data, &[0x7, 0xf, 0xf, 0xf]);
         assert_eq!(m.as_bytes().len(), 16);
+
+        let m = set_volume(Bus::Output, 9, 0x80_0000);
+        let d = parse_dt1(m.as_bytes()).unwrap();
+        assert_eq!(d.address, [0x00, 0x05, 0x09, 0x07]);
+        assert_eq!(d.data, &[0x8, 0, 0, 0, 0, 0]);
+        assert_eq!(m.as_bytes().len(), 18);
 
         let m = set_link(Bus::Output, 2, true);
         assert_eq!(parse_dt1(m.as_bytes()).unwrap().address, [0, 0x05, 4, 0x01]);
 
         let m = set_on(Bus::MonitorOut, 1, true);
         assert_eq!(parse_dt1(m.as_bytes()).unwrap().address, [0, 0x03, 1, 0x02]);
-
-        assert_eq!(set_wide(Bus::Input, 0, 0x40).as_bytes().len(), 18);
     }
 
     #[test]

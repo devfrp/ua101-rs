@@ -1,7 +1,7 @@
 //! Visual style of the panel: palette, egui theme and custom widgets.
 
 use eframe::egui::{
-    self, Color32, CornerRadius, Frame, Margin, Rect, Response, Sense, Stroke, Ui, Vec2, Widget,
+    self, Color32, CornerRadius, Frame, Margin, Rect, Response, Sense, Stroke, Ui, Vec2,
 };
 
 pub const BG: Color32 = Color32::from_rgb(0x12, 0x14, 0x17);
@@ -79,48 +79,6 @@ pub fn strip_frame() -> Frame {
         .fill(STRIP)
         .corner_radius(CornerRadius::same(6))
         .inner_margin(Margin::symmetric(3, 6))
-}
-
-/// iOS-style on/off switch.
-pub struct Toggle<'a> {
-    on: &'a mut bool,
-    color: Color32,
-}
-
-impl<'a> Toggle<'a> {
-    pub fn new(on: &'a mut bool, color: Color32) -> Self {
-        Self { on, color }
-    }
-}
-
-impl Widget for Toggle<'_> {
-    fn ui(self, ui: &mut Ui) -> Response {
-        let size = Vec2::new(36.0, 20.0);
-        let (rect, mut response) = ui.allocate_exact_size(size, Sense::click());
-        if response.clicked() {
-            *self.on = !*self.on;
-            response.mark_changed();
-        }
-        if ui.is_rect_visible(rect) {
-            let t = ui.ctx().animate_bool(response.id, *self.on);
-            let off = Color32::from_rgb(0x44, 0x49, 0x52);
-            let bg = lerp_color(off, self.color, t);
-            let radius = rect.height() / 2.0;
-            ui.painter().rect_filled(rect, radius, bg);
-            let x = egui::lerp(rect.left() + radius..=rect.right() - radius, t);
-            ui.painter().circle_filled(
-                egui::pos2(x, rect.center().y),
-                radius - 3.0,
-                Color32::WHITE,
-            );
-        }
-        response
-    }
-}
-
-fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
-    let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t) as u8;
-    Color32::from_rgb(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()))
 }
 
 /// Vertical peak meter, `level` in 0.0–1.0 (linear), drawn in dBFS.

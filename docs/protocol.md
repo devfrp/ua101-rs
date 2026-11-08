@@ -159,11 +159,15 @@ is the value):
 Multi-byte values are split into 4-bit nibbles, most significant first
 (`0x20b80`: 4 nibbles for a 16-bit volume; `0x20e70`: 6 nibbles).
 
-Working hypothesis used by `ua101-panel` (**inferred**, to be confirmed by
-ear): `00 (3+bus) ch 03` is the channel VOLUME as a linear 16-bit gain with
-unity (0 dB) at `0x4000`, so `0x7fff` ≈ +6 dB, the top of Roland's fader.
-Bus 0 = MONITOR OUT, 1 = INPUT, 2 = OUTPUT (WAVE); `ch 02` = ON,
-`2·pair 01` = LINK.
+Channel parameters, `00 (3+bus) ch slot` with bus 0 = MONITOR OUT,
+1 = INPUT, 2 = OUTPUT (WAVE):
+
+| Slot | Size            | Meaning | Evidence |
+|------|-----------------|---------|----------|
+| `01` | 1 byte (on `2·pair`) | stereo LINK of a channel pair | inferred |
+| `02` | 1 byte          | monitor ON; for OUTPUT strips, send to MONITOR OUT | inferred |
+| `03` | 16-bit, 4 nibbles | **PAN / balance**, centre `0x4000` | **observed**: sweeping it moved the channel left/right on a real unit |
+| `07` | 24-bit, 6 nibbles | VOLUME | inferred; the panel assumes unity at `0x800000` (max `0xffffff` ≈ +6 dB) |
 
 ### Front-panel status (observed, device)
 
