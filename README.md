@@ -65,8 +65,9 @@ time, right-click it and choose *Open*, or run
 ## The driver daemon (Linux)
 
 `ua101d` plays the role of Roland's Windows driver. It owns the unit, runs
-the audio streams, keeps the mixer state (and restores it when the unit is
-plugged in), and gives the panel a control channel. Applications reach the
+the audio streams, keeps the mixer state (saved to disk; re-sent when the
+unit is plugged in only with `--restore`, since some mixer addresses are
+still unconfirmed), and gives the panel a control channel. Applications reach the
 card through the `snd-aloop` loopback card `UA101RS`:
 
 - **device 0** of `UA101RS` is the UA-101 for applications and

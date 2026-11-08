@@ -44,9 +44,11 @@ pub struct Args {
     /// Control socket (default: $XDG_RUNTIME_DIR/ua101d.sock).
     #[arg(long)]
     socket: Option<PathBuf>,
-    /// Do not re-send the saved mixer settings when the unit connects.
+    /// Re-send the saved mixer settings when the unit connects. Off by
+    /// default until every mixer address is confirmed on hardware: a wrong
+    /// value would silence the monitor mix at every start.
     #[arg(long)]
-    no_restore: bool,
+    restore: bool,
 }
 
 static STOP: AtomicBool = AtomicBool::new(false);
@@ -104,10 +106,10 @@ pub fn run() -> Result<()> {
     info!("control socket: {}", socket.display());
 
     let state_path = control::state_path();
-    let state = if args.no_restore {
-        State::new()
-    } else {
+    let state = if args.restore {
         control::load_state(&state_path)
+    } else {
+        State::new()
     };
     let mut shared = Shared {
         clients,
