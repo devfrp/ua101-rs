@@ -16,7 +16,7 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use log::{error, info, warn};
-use ua101_usb::{StreamConfig, Ua101, list_devices};
+use ua101_usb::{MidiPort, StreamConfig, Ua101, list_devices, protocol::mixer::MixerState};
 
 use crate::{
     alsa::{self, Config, Direction, Pcm},
@@ -74,6 +74,35 @@ struct Shared {
     state_path: PathBuf,
     levels: SharedLevels,
     info: String,
+    /// Full monitor-mixer state, re-sent whenever the unit needs it.
+    mixer: MixerState,
+}
+
+/// SOFT CTRL status address reported by the unit (`00 01 00 05`).
+const SOFT_CTRL: [u8; 4] = [0x00, 0x01, 0x00, 0x05];
+
+/// Sends the whole mixer state and mirrors it for clients. Like the Windows
+/// driver, this runs when the session starts and whenever the unit reports
+/// that SOFT CTRL was switched on: the unit then takes its monitor mix from
+/// the computer and starts silent.
+fn push_mixer(midi: &mut MidiPort, shared: &mut Shared) -> usize {
+    let mut sent = 0;
+    let mut messages = Vec::new();
+    shared.mixer.for_each_message(|m| messages.push(m));
+    for m in messages {
+        if midi.send_control(&m).is_ok() {
+            sent += 1;
+            if let Ok(d) = ua101_usb::protocol::sysex::parse_dt1(m.as_bytes()) {
+                shared.clients.broadcast(&format!(
+                    "dt1 {} {}",
+                    control::hex(&d.address),
+                    control::hex(d.data)
+                ));
+                shared.state.insert(d.address, d.data.to_vec());
+            }
+        }
+    }
+    sent
 }
 
 impl Shared {
@@ -118,7 +147,13 @@ pub fn run() -> Result<()> {
         state_path,
         levels: Arc::new(Mutex::new(Levels::default())),
         info: "info connected=0".into(),
+        mixer: MixerState::initial(),
     };
+    // Saved settings (with --restore) override the initial mixer state.
+    let saved: Vec<_> = shared.state.iter().map(|(a, d)| (*a, d.clone())).collect();
+    for (a, d) in saved {
+        shared.mixer.apply(a, &d);
+    }
 
     let mut waiting_logged = false;
     while !STOP.load(Ordering::SeqCst) {
@@ -205,16 +240,8 @@ fn session(args: &Args, shared: &mut Shared) -> Result<()> {
         .context("cannot open the loopback playback side")?;
     let period = to_pcm.config().period as usize;
 
-    if !shared.state.is_empty() {
-        let restored = shared
-            .state
-            .iter()
-            .filter(|(a, _)| control::is_persistent(a))
-            .map(|(a, d)| midi.write_parameters(*a, d))
-            .filter(|r| r.is_ok())
-            .count();
-        info!("restored {restored} mixer parameter(s)");
-    }
+    let sent = push_mixer(&mut midi, shared);
+    info!("sent the mixer state ({sent} parameters)");
 
     let stop = Arc::new(AtomicBool::new(false));
     let to_thread = {
@@ -270,13 +297,21 @@ fn session(args: &Args, shared: &mut Shared) -> Result<()> {
         }
         match midi.receive_control(Duration::from_millis(20)) {
             Ok(msgs) => {
+                let mut soft_ctrl_on = false;
                 for (a, d) in msgs {
                     shared.clients.broadcast(&format!(
                         "dt1 {} {}",
                         control::hex(&a),
                         control::hex(&d)
                     ));
+                    if a == SOFT_CTRL && d.first() == Some(&1) {
+                        soft_ctrl_on = true;
+                    }
                     shared.state.insert(a, d);
+                }
+                if soft_ctrl_on {
+                    let sent = push_mixer(&mut midi, shared);
+                    info!("SOFT CTRL on: sent the mixer state ({sent} parameters)");
                 }
             }
             Err(e) => {
@@ -295,6 +330,7 @@ fn session(args: &Args, shared: &mut Shared) -> Result<()> {
                             control::hex(&d)
                         ));
                         let persist = control::is_persistent(&a);
+                        shared.mixer.apply(a, &d);
                         shared.state.insert(a, d);
                         if persist {
                             control::save_state(&shared.state_path, &shared.state);

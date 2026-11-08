@@ -64,18 +64,30 @@ impl Bus {
 
 /// Channel-strip parameter slots (last address byte).
 pub mod slot {
-    /// Stereo link of the pair starting at this (even) channel.
+    /// Stereo link of the pair starting at this (even) channel (inferred).
     pub const LINK: u8 = 0x01;
-    /// Monitor ON/OFF (for OUTPUT strips: send this output to MONITOR OUT).
-    pub const ON: u8 = 0x02;
-    /// Volume, 16-bit, sent as 4 nibbles. **Observed on hardware**: it
-    /// changes the level of that one channel (on a stereo pair this sounds
-    /// like a balance shift).
-    pub const VOLUME: u8 = 0x03;
-    /// 24-bit parameter, 6 nibbles; most likely pan. Writing it did not
-    /// change the level on hardware. Value format unknown.
-    pub const PAN: u8 = 0x07;
+    /// MUTE, 1 byte: `01` mutes, `00` unmutes. **Observed on hardware.**
+    /// For OUTPUT strips this decides whether the output reaches MONITOR
+    /// OUT.
+    pub const MUTE: u8 = 0x02;
+    /// Pan, 16-bit as 4 nibbles: `0x0000` left, `0x4000` centre, `0x7fff`
+    /// right. Moving it was heard as a balance change on hardware.
+    pub const PAN: u8 = 0x03;
+    /// Volume, linear 24-bit gain as 6 nibbles. **Observed on hardware**:
+    /// `0x400000` on both a channel and MONITOR OUT saturates, `0x100000`
+    /// on both gives a clean, normal level.
+    pub const VOLUME: u8 = 0x07;
 }
+
+/// Pan positions.
+pub const PAN_LEFT: u16 = 0x0000;
+pub const PAN_CENTER: u16 = 0x4000;
+pub const PAN_RIGHT: u16 = 0x7fff;
+
+/// Largest volume value (24-bit).
+pub const VOLUME_MAX: u32 = 0x7f_ffff;
+/// Working assumption for 0 dB: the level heard as normal on hardware.
+pub const VOLUME_UNITY: u32 = 0x10_0000;
 
 /// Splits `value` into `N` nibbles, most significant first, as the driver
 /// does for multi-byte parameters.
@@ -100,9 +112,9 @@ pub const fn channel_address(bus: Bus, channel: u8, slot: u8) -> [u8; 4] {
     [0x00, bus.block(), channel, slot]
 }
 
-/// Monitor ON/OFF of one channel (driver sub-command 23).
-pub fn set_on(bus: Bus, channel: u8, on: bool) -> Message {
-    sysex::dt1(channel_address(bus, channel, slot::ON), &[on as u8])
+/// MUTE of one channel (driver sub-command 23).
+pub fn set_mute(bus: Bus, channel: u8, muted: bool) -> Message {
+    sysex::dt1(channel_address(bus, channel, slot::MUTE), &[muted as u8])
 }
 
 /// Stereo link of channel pair `pair` (channels `2·pair` and `2·pair+1`;
@@ -111,22 +123,106 @@ pub fn set_link(bus: Bus, pair: u8, linked: bool) -> Message {
     sysex::dt1(channel_address(bus, pair * 2, slot::LINK), &[linked as u8])
 }
 
-/// Channel volume (driver sub-command 24), 16-bit. The panel assumes
-/// unity gain at `0x4000` (max `0x7fff` = +6 dB); not yet confirmed.
-pub fn set_volume(bus: Bus, channel: u8, value: u16) -> Message {
+/// Channel pan, 16-bit (driver sub-command 24).
+pub fn set_pan(bus: Bus, channel: u8, value: u16) -> Message {
     sysex::dt1(
-        channel_address(bus, channel, slot::VOLUME),
-        &nibbles::<4>(value as u32),
+        channel_address(bus, channel, slot::PAN),
+        &nibbles::<4>(value.min(0x7fff) as u32),
     )
 }
 
-/// Channel pan (driver sub-command 25), raw 24-bit value. The encoding is
-/// unknown, so callers must not guess values for users.
-pub fn set_pan_raw(bus: Bus, channel: u8, value: u32) -> Message {
+/// Channel volume, linear 24-bit gain (driver sub-command 25).
+pub fn set_volume(bus: Bus, channel: u8, value: u32) -> Message {
     sysex::dt1(
-        channel_address(bus, channel, slot::PAN),
-        &nibbles::<6>(value & 0x00ff_ffff),
+        channel_address(bus, channel, slot::VOLUME),
+        &nibbles::<6>(value.min(VOLUME_MAX)),
     )
+}
+
+/// One channel strip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Channel {
+    pub mute: bool,
+    pub pan: u16,
+    pub volume: u32,
+}
+
+/// Complete state of the monitor mixer. With SOFT CTRL on, the unit takes
+/// its whole monitor mix from the computer and starts silent, so the host
+/// must send everything (the Windows driver re-sends its state when the
+/// unit reports a front-panel change).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MixerState {
+    /// Indexed by [`Bus::index`]; MONITOR OUT uses the first two entries.
+    pub channels: [[Channel; 10]; 3],
+    pub links: [[bool; 5]; 3],
+}
+
+impl MixerState {
+    /// Safe starting point: playback (OUTPUT) reaches MONITOR OUT as stereo
+    /// pairs at the normal level, inputs are muted (no feedback), MONITOR
+    /// OUT L/R at the normal level.
+    pub fn initial() -> Self {
+        let ch = |mute, pan| Channel {
+            mute,
+            pan,
+            volume: VOLUME_UNITY,
+        };
+        let mut channels = [[ch(false, PAN_CENTER); 10]; 3];
+        let mut links = [[false; 5]; 3];
+        let (out, inp) = (Bus::Output.index() as usize, Bus::Input.index() as usize);
+        for (i, c) in channels[out].iter_mut().enumerate() {
+            *c = ch(false, if i % 2 == 0 { PAN_LEFT } else { PAN_RIGHT });
+        }
+        channels[inp] = [ch(true, PAN_CENTER); 10];
+        channels[Bus::MonitorOut.index() as usize][0] = ch(false, PAN_LEFT);
+        channels[Bus::MonitorOut.index() as usize][1] = ch(false, PAN_RIGHT);
+        links[Bus::Output.index() as usize] = [true; 5];
+        links[Bus::MonitorOut.index() as usize][0] = true;
+        Self { channels, links }
+    }
+
+    /// Updates the state from a DT1 written to the unit. Returns `false` if
+    /// the address is not a mixer channel parameter.
+    pub fn apply(&mut self, address: [u8; 4], data: &[u8]) -> bool {
+        if address[0] != 0 || !(0x03..=0x05).contains(&address[1]) || data.is_empty() {
+            return false;
+        }
+        let bus = (address[1] - 0x03) as usize;
+        let ch = address[2] as usize;
+        let Some(c) = self.channels[bus].get_mut(ch) else {
+            return false;
+        };
+        match address[3] {
+            slot::MUTE => c.mute = data[0] != 0,
+            slot::PAN if data.len() >= 4 => c.pan = from_nibbles(&data[..4]) as u16,
+            slot::VOLUME if data.len() >= 6 => c.volume = from_nibbles(&data[..6]),
+            slot::LINK => {
+                if let Some(l) = self.links[bus].get_mut(ch / 2) {
+                    *l = data[0] != 0;
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Calls `f` with every message needed to put the unit in this state.
+    pub fn for_each_message(&self, mut f: impl FnMut(Message)) {
+        for bus in Bus::ALL {
+            let i = bus.index() as usize;
+            let n = bus.channels() as usize;
+            for pair in 0..n / 2 {
+                f(set_link(bus, pair as u8, self.links[i][pair]));
+            }
+            for ch in 0..n {
+                let c = self.channels[i][ch];
+                f(set_mute(bus, ch as u8, c.mute));
+                f(set_pan(bus, ch as u8, c.pan));
+                f(set_volume(bus, ch as u8, c.volume));
+            }
+        }
+    }
 }
 
 /// Bus-level parameter at `00 (n+2) 00 00` (driver sub-command 21, `n` = 1
@@ -222,23 +318,66 @@ mod tests {
 
     #[test]
     fn channel_addresses() {
-        let m = set_volume(Bus::Input, 3, 0x7fff);
+        let m = set_pan(Bus::Input, 3, 0x7fff);
         let d = parse_dt1(m.as_bytes()).unwrap();
         assert_eq!(d.address, [0x00, 0x04, 0x03, 0x03]);
         assert_eq!(d.data, &[0x7, 0xf, 0xf, 0xf]);
         assert_eq!(m.as_bytes().len(), 16);
 
-        let m = set_pan_raw(Bus::Output, 9, 0x80_0000);
+        // The message that gave a clean level on hardware.
+        let m = set_volume(Bus::Output, 0, 0x10_0000);
         let d = parse_dt1(m.as_bytes()).unwrap();
-        assert_eq!(d.address, [0x00, 0x05, 0x09, 0x07]);
-        assert_eq!(d.data, &[0x8, 0, 0, 0, 0, 0]);
+        assert_eq!(d.address, [0x00, 0x05, 0x00, 0x07]);
+        assert_eq!(d.data, &[0x1, 0, 0, 0, 0, 0]);
         assert_eq!(m.as_bytes().len(), 18);
 
         let m = set_link(Bus::Output, 2, true);
         assert_eq!(parse_dt1(m.as_bytes()).unwrap().address, [0, 0x05, 4, 0x01]);
 
-        let m = set_on(Bus::MonitorOut, 1, true);
-        assert_eq!(parse_dt1(m.as_bytes()).unwrap().address, [0, 0x03, 1, 0x02]);
+        let m = set_mute(Bus::MonitorOut, 1, false);
+        let d = parse_dt1(m.as_bytes()).unwrap();
+        assert_eq!(d.address, [0, 0x03, 1, 0x02]);
+        assert_eq!(d.data, &[0]);
+    }
+
+    #[test]
+    fn full_state_roundtrip() {
+        let initial = MixerState::initial();
+        let mut rebuilt = MixerState::initial();
+        rebuilt.channels = [[Channel {
+            mute: true,
+            pan: 0,
+            volume: 0,
+        }; 10]; 3];
+        rebuilt.links = [[false; 5]; 3];
+        let mut count = 0;
+        initial.for_each_message(|m| {
+            let d = parse_dt1(m.as_bytes()).unwrap();
+            assert!(rebuilt.apply(d.address, d.data));
+            count += 1;
+        });
+        // 10+10+2 strips × 3 parameters + 5+5+1 links.
+        assert_eq!(count, 22 * 3 + 11);
+        // MONITOR OUT only has 2 channels; compare what was sent.
+        for bus in Bus::ALL {
+            let i = bus.index() as usize;
+            for ch in 0..bus.channels() as usize {
+                assert_eq!(rebuilt.channels[i][ch], initial.channels[i][ch]);
+            }
+        }
+    }
+
+    #[test]
+    fn initial_state_is_safe() {
+        let s = MixerState::initial();
+        let input = Bus::Input.index() as usize;
+        assert!(s.channels[input].iter().all(|c| c.mute));
+        let out = Bus::Output.index() as usize;
+        assert!(
+            s.channels[out]
+                .iter()
+                .all(|c| !c.mute && c.volume == VOLUME_UNITY)
+        );
     }
 
     #[test]

@@ -165,9 +165,14 @@ Channel parameters, `00 (3+bus) ch slot` with bus 0 = MONITOR OUT,
 | Slot | Size            | Meaning | Evidence |
 |------|-----------------|---------|----------|
 | `01` | 1 byte (on `2·pair`) | stereo LINK of a channel pair | inferred |
-| `02` | 1 byte          | monitor ON; for OUTPUT strips, send to MONITOR OUT | inferred |
-| `03` | 16-bit, 4 nibbles | **VOLUME** of that channel | **observed**: changes the level of one channel (on a stereo pair it first sounded like a balance shift); scale unknown, the panel assumes unity at `0x4000` |
-| `07` | 24-bit, 6 nibbles | probably PAN | **observed**: does not change the level; value format unknown |
+| `02` | 1 byte          | **MUTE** (`01` muted, `00` audible); for OUTPUT strips, whether the output reaches MONITOR OUT | **observed**: `00` brought the sound back. The Windows 10 panel has MUTE buttons (`CBtnMute`, `IDM_MUTE_ON_ALL`) |
+| `03` | 16-bit, 4 nibbles | **PAN**, `0x4000` centre | **observed**: sweeping it was heard as a balance change. Panel presets `IDM_PAN_L100/C0/R100` |
+| `07` | 24-bit, 6 nibbles | **VOLUME**, linear gain | **observed**: `0x400000` on a channel and on MONITOR OUT saturates, `0x100000` on both gives a clean, normal level. The panel's "set all" helper (`0x140004530`) is called with `0x7fffff, 0x400000, 0x200000, …, 0x8000` (6 dB steps) |
+
+**SOFT CTRL**: with it on, the unit takes the whole monitor mix from the
+computer and starts silent. The host must send the full mixer state;
+`ua101d` does so when a session starts and whenever the unit reports SOFT
+CTRL on (`00 01 00 05 = 01`).
 
 The driver keeps exactly these three values per channel (`0x22610`,
 `0x22700`, `0x227d0`: offsets +0, +4, +8 of a 12-byte record) plus LINK

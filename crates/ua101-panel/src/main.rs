@@ -36,20 +36,36 @@ const STRIP_WIDTH: f32 = 40.0;
 /// Fader range in dB. The bottom position means -inf (muted).
 const FADER_MIN_DB: f32 = -60.0;
 const FADER_MAX_DB: f32 = 6.0;
-/// Device value for 0 dB. Hypothesis: a linear 16-bit gain with unity at
-/// 0x4000, so the 16-bit maximum 0x7fff sits at +6 dB. The address (slot
-/// 03) is confirmed on hardware; the scale is not.
-const VOLUME_UNITY: f32 = 16_384.0;
+/// Device value for 0 dB: the level heard as normal on hardware.
+const VOLUME_UNITY: f32 = mixer::VOLUME_UNITY as f32;
 
-/// Converts a fader position in dB to the 16-bit device value.
-fn volume_raw(db: f32) -> u16 {
+/// Converts a fader position in dB to the 24-bit device gain.
+fn volume_raw(db: f32) -> u32 {
     if db <= FADER_MIN_DB {
         0
     } else {
         (VOLUME_UNITY * 10f32.powf(db / 20.0))
             .round()
-            .clamp(0.0, 32_767.0) as u16
+            .clamp(0.0, mixer::VOLUME_MAX as f32) as u32
     }
+}
+
+/// Converts a 24-bit device gain to a fader position in dB.
+fn volume_db(raw: u32) -> f32 {
+    if raw == 0 {
+        FADER_MIN_DB
+    } else {
+        (20.0 * (raw as f32 / VOLUME_UNITY).log10()).clamp(FADER_MIN_DB, FADER_MAX_DB)
+    }
+}
+
+/// Pan control (-64 left … 0 centre … +63 right) to the 16-bit device value.
+fn pan_raw(pan: i32) -> u16 {
+    (mixer::PAN_CENTER as i32 + pan * 256).clamp(0, 0x7fff) as u16
+}
+
+fn pan_from_raw(raw: u16) -> i32 {
+    ((raw as i32 - mixer::PAN_CENTER as i32) / 256).clamp(-64, 63)
 }
 
 fn format_db(db: f32) -> String {
@@ -85,20 +101,11 @@ fn main() -> eframe::Result {
 
 #[derive(Clone, Copy)]
 struct Strip {
+    /// Audible (not muted). For OUTPUT strips: sent to MONITOR OUT.
     on: bool,
     pan: i32,
     /// Fader position in dB (`FADER_MIN_DB` = -inf).
     volume_db: f32,
-}
-
-impl Default for Strip {
-    fn default() -> Self {
-        Self {
-            on: false,
-            pan: 0,
-            volume_db: 0.0,
-        }
-    }
 }
 
 /// Local mirror of the mixer, indexed by [`Bus::index`]. The unit does not
@@ -110,8 +117,19 @@ struct Mixer {
 
 impl Mixer {
     fn new() -> Self {
-        let mk = |b: Bus| vec![Strip::default(); b.channels() as usize];
-        let lk = |b: Bus| vec![b == Bus::MonitorOut; b.channels() as usize / 2];
+        // Same starting point as the daemon.
+        let init = mixer::MixerState::initial();
+        let mk = |b: Bus| -> Vec<Strip> {
+            init.channels[b.index() as usize][..b.channels() as usize]
+                .iter()
+                .map(|c| Strip {
+                    on: !c.mute,
+                    pan: pan_from_raw(c.pan),
+                    volume_db: volume_db(c.volume),
+                })
+                .collect()
+        };
+        let lk = |b: Bus| init.links[b.index() as usize][..b.channels() as usize / 2].to_vec();
         Self {
             strips: [mk(Bus::MonitorOut), mk(Bus::Input), mk(Bus::Output)],
             links: [lk(Bus::MonitorOut), lk(Bus::Input), lk(Bus::Output)],
@@ -309,9 +327,9 @@ impl Panel {
         let bus = (a[1] - 0x03) as usize;
         let ch = a[2] as usize;
         match a[3] {
-            mixer::slot::ON => {
+            mixer::slot::MUTE => {
                 if let Some(s) = self.mixer.strips[bus].get_mut(ch) {
-                    s.on = d[0] != 0;
+                    s.on = d[0] == 0;
                 }
             }
             mixer::slot::LINK => {
@@ -319,14 +337,14 @@ impl Panel {
                     *l = d[0] != 0;
                 }
             }
-            mixer::slot::VOLUME if d.len() >= 4 => {
-                let raw = mixer::from_nibbles(&d[..4]) as f32;
+            mixer::slot::PAN if d.len() >= 4 => {
                 if let Some(s) = self.mixer.strips[bus].get_mut(ch) {
-                    s.volume_db = if raw <= 0.0 {
-                        FADER_MIN_DB
-                    } else {
-                        (20.0 * (raw / VOLUME_UNITY).log10()).clamp(FADER_MIN_DB, FADER_MAX_DB)
-                    };
+                    s.pan = pan_from_raw(mixer::from_nibbles(&d[..4]) as u16);
+                }
+            }
+            mixer::slot::VOLUME if d.len() >= 6 => {
+                if let Some(s) = self.mixer.strips[bus].get_mut(ch) {
+                    s.volume_db = volume_db(mixer::from_nibbles(&d[..6]));
                 }
             }
             _ => {}
@@ -626,7 +644,7 @@ impl Panel {
         let mut sends = Vec::new();
         for (ch, st) in self.mixer.strips[idx].iter_mut().enumerate() {
             st.on = on;
-            sends.push(mixer::set_on(Bus::Output, ch as u8, on));
+            sends.push(mixer::set_mute(Bus::Output, ch as u8, !on));
         }
         self.status = if on {
             "All outputs are sent to MONITOR OUT.".into()
@@ -728,8 +746,19 @@ impl Panel {
                                             match what {
                                                 Change::On => {
                                                     st.on = s.on;
-                                                    sends.push(mixer::set_on(bus, t as u8, s.on));
+                                                    sends
+                                                        .push(mixer::set_mute(bus, t as u8, !s.on));
                                                 }
+                                                // Pan stays per channel when linked.
+                                                Change::Pan if t == ch => {
+                                                    st.pan = s.pan;
+                                                    sends.push(mixer::set_pan(
+                                                        bus,
+                                                        t as u8,
+                                                        pan_raw(s.pan),
+                                                    ));
+                                                }
+                                                Change::Pan => {}
                                                 Change::Volume => {
                                                     st.volume_db = s.volume_db;
                                                     sends.push(mixer::set_volume(
@@ -1017,6 +1046,7 @@ impl Panel {
 #[derive(Clone, Copy)]
 enum Change {
     On,
+    Pan,
     Volume,
 }
 
@@ -1044,30 +1074,34 @@ fn strip_ui(ui: &mut egui::Ui, c: &StripCtx, s: &mut Strip) -> Option<Change> {
             };
             ui.label(RichText::new(name).size(13.0).strong().color(c.accent));
 
-            // On OUTPUT strips this button sends the output to MONITOR OUT.
-            let (label, lit, hover) = if c.bus == Bus::Output {
+            // OUTPUT strips: MAIN (lit = sent to MONITOR OUT). Others: MUTE
+            // (lit = muted). Both drive the MUTE parameter (00 0b ch 02).
+            let (label, lit_when_on, fill, hover) = if c.bus == Bus::Output {
                 (
                     "MAIN",
+                    true,
                     theme::ORANGE,
-                    "Send this output (WAVE OUT) to MONITOR OUT (00 05 ch 02)",
+                    "Send this output to MONITOR OUT",
                 )
             } else {
                 (
-                    "ON",
-                    theme::GREEN,
-                    "Monitor ON/OFF (address inferred: 00 0b ch 02)",
+                    "MUTE",
+                    false,
+                    theme::RED,
+                    "Mute this channel in the monitor mix",
                 )
             };
-            let on_text = RichText::new(label).size(10.0).strong().color(if s.on {
+            let lit = s.on == lit_when_on;
+            let text = RichText::new(label).size(10.0).strong().color(if lit {
                 Color32::BLACK
             } else {
                 theme::TEXT_DIM
             });
-            let mut on_btn = egui::Button::new(on_text).min_size(button);
-            if s.on {
-                on_btn = on_btn.fill(lit);
+            let mut btn = egui::Button::new(text).min_size(button);
+            if lit {
+                btn = btn.fill(fill);
             }
-            if ui.add(on_btn).on_hover_text(hover).clicked() {
+            if ui.add(btn).on_hover_text(hover).clicked() {
                 s.on = !s.on;
                 change = Some(Change::On);
             }
@@ -1076,19 +1110,26 @@ fn strip_ui(ui: &mut egui::Ui, c: &StripCtx, s: &mut Strip) -> Option<Change> {
                 egui::Button::new(RichText::new("SOLO").size(9.0)).min_size(button),
             )
             .on_disabled_hover_text("SOLO address not identified yet");
-            ui.add_enabled(
-                false,
-                egui::DragValue::new(&mut s.pan)
-                    .range(-64..=63)
-                    .custom_formatter(|v, _| match v as i32 {
-                        0 => "C".into(),
-                        v if v < 0 => format!("L{}", -v),
-                        v => format!("R{v}"),
-                    }),
-            )
-            .on_disabled_hover_text(
-                "PAN: probably slot 07 (24-bit); its value format is not known yet",
-            );
+            let mut pan = s.pan;
+            let r = ui
+                .add(
+                    egui::DragValue::new(&mut pan)
+                        .range(-64..=63)
+                        .speed(0.5)
+                        .custom_formatter(|v, _| match v as i32 {
+                            0 => "C".into(),
+                            v if v < 0 => format!("L{}", -v),
+                            v => format!("R{v}"),
+                        }),
+                )
+                .on_hover_text("PAN: drag left/right, double-click to centre");
+            if r.double_clicked() {
+                pan = 0;
+            }
+            if pan != s.pan {
+                s.pan = pan;
+                change = Some(Change::Pan);
+            }
 
             let mut db = s.volume_db;
             ui.horizontal(|ui| {
@@ -1104,7 +1145,7 @@ fn strip_ui(ui: &mut egui::Ui, c: &StripCtx, s: &mut Strip) -> Option<Change> {
                             .show_value(false),
                     )
                     .on_hover_text(format!(
-                        "VOLUME {} dB (device value {:#06x}, unity 0x4000 assumed; 00 0b ch 03). \
+                        "VOLUME {} dB (device gain {:#08x}; 0 dB = 0x100000, the normal level). \
                          Double-click: 0 dB",
                         format_db(db),
                         volume_raw(db)
