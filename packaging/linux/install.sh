@@ -73,6 +73,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
     systemctl --user disable --now ua101d.service 2>/dev/null || true
     $SUDO rm -f "$PREFIX/bin/ua101" "$PREFIX/bin/ua101-panel" "$PREFIX/bin/ua101d" \
         "$RULES_DST" "$MODPROBE_DST" "$ALOOP_DST" "$MODLOAD_DST" "$UNIT_DIR/ua101d.service" \
+        /etc/wireplumber/wireplumber.conf.d/51-ua101.conf \
         "/usr/share/applications/ua101-panel.desktop"
     reload_udev
     say "done"
@@ -218,6 +219,13 @@ if [ "$NO_DAEMON" -eq 0 ] && [ -f "$SRC/ua101d" ]; then
     $SUDO install -d /etc/modprobe.d /etc/modules-load.d "$UNIT_DIR"
     $SUDO install -m 644 "$SRC/ua101-aloop.conf" "$ALOOP_DST"
     $SUDO install -m 644 "$SRC/ua101-modules.conf" "$MODLOAD_DST"
+    if [ -f "$SRC/51-ua101.conf" ]; then
+        # PipeWire/WirePlumber: pro-audio profile, 10 out / 12 in, hide the
+        # daemon's side of the loopback card.
+        $SUDO install -d /etc/wireplumber/wireplumber.conf.d
+        $SUDO install -m 644 "$SRC/51-ua101.conf" /etc/wireplumber/wireplumber.conf.d/51-ua101.conf
+        systemctl --user restart wireplumber 2>/dev/null || true
+    fi
     sed "s|@BINDIR@|$PREFIX/bin|" "$SRC/ua101d.service" > "$TMP/ua101d.service"
     $SUDO install -m 644 "$TMP/ua101d.service" "$UNIT_DIR/ua101d.service"
     if ! grep -q '\[UA101RS' /proc/asound/cards 2>/dev/null; then

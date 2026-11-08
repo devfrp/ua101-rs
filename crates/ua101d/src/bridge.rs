@@ -64,7 +64,16 @@ pub fn to_device(
         let _ = tx.push(0);
     }
     while !stop.load(Ordering::Relaxed) {
-        let frames = pcm.read(&mut buf)?;
+        let frames = match pcm.read(&mut buf) {
+            Ok(f) => f,
+            Err(e) if is_peer_mismatch(&e) => {
+                // The application side of the loopback is configured with a
+                // different format; wait for it to match.
+                wait_for_peer(&pcm, &stop, "to-device");
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
         let mut n = frames * channels;
         for s in &mut buf[..n] {
             *s >>= 8; // S32_LE from applications → 24-bit
@@ -147,9 +156,38 @@ pub fn from_device(
         for s in &mut buf[..m] {
             *s <<= 8; // 24-bit → S32_LE for applications
         }
-        pcm.write(&buf[..m])?;
+        if let Err(e) = pcm.write(&buf[..m]) {
+            if is_peer_mismatch(&e) {
+                wait_for_peer(&pcm, &stop, "from-device");
+            } else {
+                return Err(e);
+            }
+        }
     }
     Ok(())
+}
+
+/// `snd-aloop` reports EIO when the two ends of the loopback cable use
+/// different formats (e.g. PipeWire opened the application side as stereo).
+fn is_peer_mismatch(e: &std::io::Error) -> bool {
+    e.raw_os_error() == Some(libc::EIO)
+}
+
+fn wait_for_peer(pcm: &Pcm, stop: &AtomicBool, side: &str) {
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    if !WARNED.swap(true, Ordering::Relaxed) {
+        log::warn!(
+            "{side}: the application side of the loopback card uses another format; \
+             set its PipeWire profile to pro-audio (see packaging/linux/51-ua101.conf)"
+        );
+    }
+    for _ in 0..10 {
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    let _ = pcm.prepare();
 }
 
 #[cfg(test)]

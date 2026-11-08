@@ -15,12 +15,13 @@ checked against the descriptors of a real unit. See [`docs/protocol.md`](docs/pr
 | Direct monitoring (experimental) | ✅    | ✅    | ✅      |
 | MIDI in/out                      | ✅    | ✅    | ✅      |
 | Audio, 10 outputs / 12 inputs    | ✅ (usbfs) | 🚧 IOKit isoch | 🚧 WinUSB isoch |
-| System audio device (`ua101d` driver daemon) | 🧪 written, hardware test pending | 🚧 | 🚧 |
+| System audio device (`ua101d` driver daemon) | ✅ PipeWire/ALSA, 10 out / 12 in | 🚧 | 🚧 |
 | Mixer / device panel (Roland SysEx)           | ✅ (addresses partly inferred) | ✅ | ✅ |
 
-✅ implemented · 🧪 implemented, not yet verified on hardware · 🚧 to do. On Linux, 12-channel recording has been verified
-on a real unit at 44.1 kHz. Audible playback is still to be verified (see
-*Open questions* in `docs/protocol.md`).
+✅ implemented · 🧪 implemented, not yet verified on hardware · 🚧 to do. On Linux, playback and 12-channel recording
+through `ua101d` and PipeWire have been verified on a real unit at 44.1 kHz
+(bit-exact levels). The other rate positions and the mixer write addresses
+are still to be verified (see *Open questions* in `docs/protocol.md`).
 
 ## Installation
 
@@ -69,8 +70,12 @@ plugged in), and gives the panel a control channel. Applications reach the
 card through the `snd-aloop` loopback card `UA101RS`:
 
 - **device 0** of `UA101RS` is the UA-101 for applications and
-  PipeWire/JACK: 10 outputs, 12 inputs;
+  PipeWire/JACK: 10 outputs, 12 inputs (shown as "UA-101" in PipeWire);
 - device 1 is reserved for the daemon.
+
+The WirePlumber rule `packaging/linux/51-ua101.conf` (installed by the
+installer) selects the pro-audio profile with the right channel counts and
+hides the daemon's device; the loopback refuses any other format.
 
 The installer sets everything up. By hand:
 

@@ -159,11 +159,13 @@ impl DuplexStream {
     }
 
     fn shutdown(&mut self) -> Result<()> {
+        // After `split`, the thread belongs to the `StreamControl`: leave the
+        // shared stop flag alone.
+        let Some(t) = self.thread.take() else {
+            return Ok(());
+        };
         self.stop.store(true, Ordering::Release);
-        match self.thread.take() {
-            Some(t) => t.join().map_err(|_| Error::ThreadPanicked)?,
-            None => Ok(()),
-        }
+        t.join().map_err(|_| Error::ThreadPanicked)?
     }
 }
 
@@ -208,11 +210,13 @@ impl StreamControl {
     }
 
     fn shutdown(&mut self) -> Result<()> {
+        // After `split`, the thread belongs to the `StreamControl`: leave the
+        // shared stop flag alone.
+        let Some(t) = self.thread.take() else {
+            return Ok(());
+        };
         self.stop.store(true, Ordering::Release);
-        match self.thread.take() {
-            Some(t) => t.join().map_err(|_| Error::ThreadPanicked)?,
-            None => Ok(()),
-        }
+        t.join().map_err(|_| Error::ThreadPanicked)?
     }
 }
 

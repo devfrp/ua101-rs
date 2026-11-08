@@ -38,7 +38,7 @@ jobs:
           cp target/release/ua101 target/release/ua101-panel target/release/ua101d dist/ua101-linux/
           cp packaging/linux/60-ua101.rules packaging/linux/ua101-panel.desktop \
              packaging/linux/ua101d.service packaging/linux/ua101-aloop.conf \
-             packaging/linux/ua101-modules.conf \
+             packaging/linux/ua101-modules.conf packaging/linux/51-ua101.conf \
              packaging/linux/install.sh README.md LICENSE-MIT LICENSE-APACHE dist/ua101-linux/
           tar -czf ua101-linux-${{ matrix.arch }}.tar.gz -C dist ua101-linux
       - uses: actions/upload-artifact@v4
@@ -63,7 +63,7 @@ jobs:
              target/x86_64-unknown-linux-musl/release/ua101d dist/ua101-linux/
           cp packaging/linux/60-ua101.rules packaging/linux/install.sh \
              packaging/linux/ua101d.service packaging/linux/ua101-aloop.conf \
-             packaging/linux/ua101-modules.conf README.md \
+             packaging/linux/ua101-modules.conf packaging/linux/51-ua101.conf README.md \
              LICENSE-MIT LICENSE-APACHE dist/ua101-linux/
           tar -czf ua101-linux-x86_64-musl.tar.gz -C dist ua101-linux
       - uses: actions/upload-artifact@v4
