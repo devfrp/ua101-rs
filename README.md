@@ -1,124 +1,127 @@
 # ua101-rs
 
-Pilote **multi-plateforme en Rust** pour l'interface audio USB
-**Roland / EDIROL UA-101**, dont Roland ne fournit plus de pilote à jour.
+A **cross-platform Rust driver** for the **Roland / EDIROL UA-101** USB
+audio interface. Roland no longer ships up-to-date drivers for it.
 
-Il tourne entièrement en espace utilisateur et ne contient aucun code C.
-Le protocole a été reconstitué par analyse statique du pilote Windows
-d'origine, puis vérifié sur
-les descripteurs d'une vraie carte. Voir [`docs/protocol.md`](docs/protocol.md).
+It runs entirely in user space and contains no C code. The protocol was
+reconstructed by static analysis of Roland's original Windows driver, then checked against the descriptors
+of a real unit. See [`docs/protocol.md`](docs/protocol.md).
 
-## État
+## Status
 
-| Fonction                       | Linux | macOS | Windows |
-|--------------------------------|:-----:|:-----:|:-------:|
-| Détection, descripteurs        | ✅    | ✅    | ✅ (WinUSB) |
-| Monitoring direct (expérimental) | ✅  | ✅    | ✅      |
-| MIDI in/out                    | ✅    | ✅    | ✅      |
-| Audio 10 sorties / 12 entrées  | ✅ (usbfs) | 🚧 IOKit isoch | 🚧 WinUSB isoch |
-| Périphérique audio système (PipeWire/JACK, CoreAudio, ASIO/WASAPI) | 🚧 | 🚧 | 🚧 |
+| Feature                          | Linux | macOS | Windows |
+|----------------------------------|:-----:|:-----:|:-------:|
+| Detection, descriptors           | ✅    | ✅    | ✅ (WinUSB) |
+| Direct monitoring (experimental) | ✅    | ✅    | ✅      |
+| MIDI in/out                      | ✅    | ✅    | ✅      |
+| Audio, 10 outputs / 12 inputs    | ✅ (usbfs) | 🚧 IOKit isoch | 🚧 WinUSB isoch |
+| System audio device (PipeWire/JACK, CoreAudio, ASIO/WASAPI) | 🚧 | 🚧 | 🚧 |
 
-✅ implémenté · 🚧 à faire. Sous Linux, l'enregistrement 12 canaux a été
-validé sur une vraie carte à 44,1 kHz. La lecture audible reste à
-valider (voir *Questions ouvertes* dans `docs/protocol.md`).
+✅ implemented · 🚧 to do. On Linux, 12-channel recording has been verified
+on a real unit at 44.1 kHz. Audible playback is still to be verified (see
+*Open questions* in `docs/protocol.md`).
 
 ## Installation
 
-### Linux (toutes distributions)
+### Linux (any distribution)
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/devfrp/ua101-rs/main/packaging/linux/install.sh | sh
 ```
 
-Le script détecte l'architecture (x86_64, aarch64) et la libc (glibc ou
-musl). Il installe les bibliothèques du panneau avec le gestionnaire de
-paquets de la distribution (apt, dnf, pacman, zypper, xbps), vérifie le
-SHA-256 de l'archive, puis installe `ua101`, `ua101-panel` et une règle
-udev qui donne l'accès à la carte sans root.
+The script:
 
-Options : `sh -s -- --cli-only`, `--no-deps`, `--version v0.1.0`,
-`--prefix ~/.local`, `--blacklist-kernel` (empêche le pilote noyau
-`snd-ua101` de prendre la carte), `--uninstall`.
+- detects the architecture (x86_64, aarch64) and the libc (glibc or musl);
+- installs the panel's runtime libraries with the distribution's package
+  manager (apt, dnf, pacman, zypper, xbps);
+- checks the archive's SHA-256;
+- installs `ua101`, `ua101-panel` and a udev rule that gives access to the
+  card without root.
 
-> Linux contient déjà un pilote noyau (`snd-ua101`). `ua101` le détache
-> automatiquement des interfaces qu'il utilise, puis le rattache en sortant.
+Options: `sh -s -- --cli-only`, `--no-deps`, `--version v0.1.0`,
+`--prefix ~/.local`, `--blacklist-kernel` (stops the in-kernel `snd-ua101`
+driver from claiming the card), `--uninstall`.
+
+> Linux already includes a kernel driver (`snd-ua101`). `ua101` detaches it
+> from the interfaces it uses and reattaches it on exit.
 
 ### Windows
 
-Télécharge `ua101-panel-windows-x86_64.exe` (panneau) ou
-`ua101-windows-x86_64.exe` (ligne de commande) depuis les
-[releases](https://github.com/devfrp/ua101-rs/releases). La carte doit
-être associée au pilote générique WinUSB avec Zadig : voir
+Download `ua101-panel-windows-x86_64.exe` (panel) or
+`ua101-windows-x86_64.exe` (command line) from the
+[releases](https://github.com/devfrp/ua101-rs/releases). You must first bind
+the card to the generic WinUSB driver with Zadig; see
 [`packaging/windows/README.md`](packaging/windows/README.md).
 
 ### macOS
 
-Télécharge `ua101-macos-universal.dmg` (Intel + Apple Silicon) et glisse
-**UA-101 Panel** dans *Applications*. L'app n'est pas notariée : au premier
-lancement, fais clic droit → *Ouvrir*, ou lance
+Download `ua101-macos-universal.dmg` (Intel + Apple Silicon) and drag
+**UA-101 Panel** into *Applications*. The app is not notarized, so the first
+time, right-click it and choose *Open*, or run
 `xattr -dr com.apple.quarantine "/Applications/UA-101 Panel.app"`.
 
-## Utilisation
+## Usage
 
 ```sh
-ua101 list                         # cartes connectées
-ua101 info --raw                   # formats, endpoints, descripteur brut
-ua101 monitor on --input 1         # monitoring direct de l'entrée 1
-ua101 midi-in --seconds 30         # affiche le MIDI reçu
-ua101 midi-out 90 3c 64            # envoie un Note On
-ua101 tone --output 1 --freq 1000  # bip de test (Linux)
-ua101 play fichier.wav --output 3  # lecture sur les sorties 3+ (Linux)
-ua101 record prise.wav --seconds 60  # enregistre les 12 entrées (Linux)
+ua101 list                          # connected units
+ua101 info --raw                    # formats, endpoints, raw descriptor
+ua101 monitor on --input 1          # direct monitoring of input 1
+ua101 midi-in --seconds 30          # print incoming MIDI
+ua101 midi-out 90 3c 64             # send a Note On
+ua101 tone --output 1 --freq 1000   # test tone (Linux)
+ua101 play file.wav --output 3      # play on outputs 3 and up (Linux)
+ua101 record take.wav --seconds 60  # record all 12 inputs (Linux)
 ```
 
-La fréquence d'échantillonnage se règle avec le sélecteur de la carte. Le
-pilote la lit dans les descripteurs.
+The sample rate is set with the switch on the unit. The driver reads it
+from the descriptors.
 
-## Compiler depuis les sources
+## Building from source
 
 ```sh
-cargo build --release              # tout le workspace
-cargo test --workspace             # tests (aucune carte nécessaire)
+cargo build --release              # whole workspace
+cargo test --workspace             # tests (no hardware needed)
 cargo run -p ua101-cli -- info     # CLI
-cargo run -p ua101-panel           # panneau graphique
+cargo run -p ua101-panel           # graphical panel
 ```
 
-Rust ≥ 1.85 (1.95 pour le panneau). Sous Linux, le panneau a besoin à la
-compilation des en-têtes `libxkbcommon`, `wayland`, `libGL` et `libX11`.
+Requires Rust 1.85 or later (1.95 for the panel). On Linux, building the
+panel needs the `libxkbcommon`, `wayland`, `libGL` and `libX11` development
+headers.
 
 ## Architecture
 
 ```
 crates/
-  ua101-protocol   no_std, sans dépendances : descripteurs, format des
-                   échantillons, taille des paquets, requête vendor, USB-MIDI
-  ua101-usb        pilote : nusb (contrôle, bulk) + backend isochrone par OS
-                   (Linux : usbfs), moteur full-duplex avec ring buffers
-  ua101-cli        binaire `ua101`
-  ua101-panel      binaire `ua101-panel` (egui)
-packaging/         installeur Linux, règle udev, bundle macOS, notes Windows
-docs/protocol.md   protocole USB et preuves
+  ua101-protocol   no_std, no dependencies: descriptors, sample format,
+                   packet sizing, vendor request, USB-MIDI
+  ua101-usb        driver: nusb (control, bulk) + one isochronous backend per OS
+                   (Linux: usbfs), full-duplex engine with ring buffers
+  ua101-cli        `ua101` binary
+  ua101-panel      `ua101-panel` binary (egui)
+packaging/         Linux installer, udev rule, macOS bundle, Windows notes
+docs/protocol.md   USB protocol and evidence
 ```
 
-## Publier une version
+## Releasing
 
 ```sh
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
-Le workflow `release.yml` compile Linux (x86_64, aarch64, musl), Windows
-(`.exe`) et macOS (`.app` universelle en `.dmg`), puis publie les fichiers et
-`SHA256SUMS` dans la release GitHub.
+The `release.yml` workflow builds Linux (x86_64, aarch64, musl), Windows
+(`.exe`) and macOS (universal `.app` in a `.dmg`), then publishes the
+files and `SHA256SUMS` in the GitHub release.
 
-## Note légale
+## Legal
 
-Ce projet est une réimplémentation indépendante, faite pour
-l'interopérabilité. Il ne contient ni ne redistribue aucun fichier de
-Roland : les paquets de pilotes d'origine sont exclus du dépôt. « Roland »,
-« EDIROL » et « UA-101 » sont des marques de Roland Corporation, qui n'est
-pas associée à ce projet.
+This project is an independent reimplementation made for interoperability.
+It neither contains nor redistributes any Roland files: the original driver
+packages are excluded from the repository. "Roland", "EDIROL" and "UA-101"
+are trademarks of Roland Corporation, which is not affiliated with this
+project.
 
-## Licence
+## License
 
-Au choix, [MIT](LICENSE-MIT) ou [Apache-2.0](LICENSE-APACHE).
+Your choice of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE).
 © 2026 devfrp.
