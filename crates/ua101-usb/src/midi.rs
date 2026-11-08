@@ -114,6 +114,31 @@ impl MidiPort {
         Ok(out)
     }
 
+    /// Sends a pre-built SysEx message on the control cable.
+    pub fn send_control(&mut self, message: &sysex::Message) -> Result<()> {
+        self.send_on_cable(CONTROL_CABLE, message.as_bytes(), Duration::from_secs(1))
+    }
+
+    /// Waits up to `timeout` for DT1 messages the device sends on the
+    /// control cable (front-panel changes and replies). External MIDI
+    /// traffic received meanwhile is dropped.
+    pub fn receive_control(&mut self, timeout: Duration) -> Result<Vec<([u8; 4], Vec<u8>)>> {
+        for p in self.receive_packets(timeout)? {
+            if let Some((CONTROL_CABLE, data)) = decode_packet(&p) {
+                self.control_rx.extend_from_slice(data);
+            }
+        }
+        let mut out = Vec::new();
+        while let Some(end) = self.control_rx.iter().position(|&b| b == 0xf7) {
+            let msg: Vec<u8> = self.control_rx.drain(..=end).collect();
+            let start = msg.iter().position(|&b| b == 0xf0).unwrap_or(0);
+            if let Ok(d) = sysex::parse_dt1(&msg[start..]) {
+                out.push((d.address, d.data.to_vec()));
+            }
+        }
+        Ok(out)
+    }
+
     /// Writes mixer/device parameters with a Roland DT1 message on the
     /// control cable.
     pub fn write_parameters(&mut self, address: [u8; 4], data: &[u8]) -> Result<()> {

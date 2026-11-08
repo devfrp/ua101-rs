@@ -20,6 +20,7 @@ pub mod descriptors;
 #[cfg(test)]
 mod fixtures;
 pub mod midi;
+pub mod mixer;
 pub mod monitor;
 pub mod packets;
 pub mod pcm;
