@@ -309,9 +309,16 @@ impl Drop for UsbFs {
             let mut n = intf;
             let _ = self.ioctl(USBDEVFS_RELEASEINTERFACE, (&mut n as *mut u32).cast());
         }
-        if self.reattach {
-            for intf in std::mem::take(&mut self.detached) {
-                let _ = self.interface_ioctl(intf, USBDEVFS_CONNECT);
+        if self.reattach && !std::mem::take(&mut self.detached).is_empty() {
+            // snd-ua101 binds the whole card from interface 0 and gives up
+            // all three interfaces when any one is detached, so reconnect
+            // every interface in order rather than only the ones we took.
+            for intf in [
+                ua101_protocol::INTF_PLAYBACK,
+                ua101_protocol::INTF_CAPTURE,
+                ua101_protocol::INTF_MIDI,
+            ] {
+                let _ = self.interface_ioctl(intf as u32, USBDEVFS_CONNECT);
             }
         }
     }

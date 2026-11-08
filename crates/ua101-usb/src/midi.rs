@@ -167,12 +167,12 @@ impl MidiPort {
 impl Drop for MidiPort {
     fn drop(&mut self) {
         // Release the endpoints and the interface first, then give the
-        // interface back to the kernel's snd-ua101 driver (Linux only).
+        // card back to the kernel's snd-ua101 driver (Linux only).
         self.out_ep.take();
         self.in_ep.take();
         if let Some(intf) = self.interface.take() {
             let _ = intf.release().wait();
         }
-        let _ = self.device.attach_kernel_driver(INTF_MIDI);
+        crate::device::reattach_kernel_driver(&self.device);
     }
 }

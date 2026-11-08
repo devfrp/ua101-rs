@@ -22,7 +22,7 @@ pub mod stream;
 #[cfg(target_os = "linux")]
 mod usbfs;
 
-pub use device::{Ua101, list_devices};
+pub use device::{Ua101, list_devices, reattach_kernel_driver};
 pub use error::{Error, Result};
 pub use midi::MidiPort;
 pub use stream::{DuplexStream, StreamConfig, StreamStats};

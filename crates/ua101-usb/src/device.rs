@@ -5,7 +5,7 @@ use nusb::{
     transfer::{ControlOut, ControlType, Recipient},
 };
 use ua101_protocol::{
-    DEFAULT_SAMPLE_RATE, INTF_CAPTURE, INTF_PLAYBACK, STREAMING_ALT_SETTING,
+    DEFAULT_SAMPLE_RATE, INTF_CAPTURE, INTF_MIDI, INTF_PLAYBACK, STREAMING_ALT_SETTING,
     descriptors::{ParseError, StreamFormat, parse_stream_format},
     is_ua101,
     monitor::{MonitorTarget, VendorRequest, direct_monitor_request},
@@ -14,6 +14,21 @@ use ua101_protocol::{
 use crate::{DuplexStream, Error, MidiPort, Result, StreamConfig};
 
 const CONTROL_TIMEOUT: Duration = Duration::from_millis(1000);
+
+/// Gives the card back to the in-kernel `snd-ua101` driver (Linux; no-op
+/// elsewhere).
+///
+/// That driver probes from interface 0 and claims interfaces 1 and 2 itself.
+/// When any interface is detached it releases the whole card, so
+/// reattaching only the interface that was used leaves the card unbound
+/// until it is replugged. Reconnecting interfaces 0, 1, 2 in order restores
+/// it. Interfaces still claimed by this process are left alone by the
+/// kernel.
+pub fn reattach_kernel_driver(device: &nusb::Device) {
+    for intf in [INTF_PLAYBACK, INTF_CAPTURE, INTF_MIDI] {
+        let _ = device.attach_kernel_driver(intf);
+    }
+}
 
 /// Lists every connected UA-101.
 pub fn list_devices() -> Result<Vec<DeviceInfo>> {
@@ -125,10 +140,7 @@ impl Ua101 {
         #[cfg(target_os = "windows")]
         {
             // WinUSB only allows control transfers through a claimed interface.
-            let intf = self
-                .device
-                .claim_interface(ua101_protocol::INTF_MIDI)
-                .wait()?;
+            let intf = self.device.claim_interface(INTF_MIDI).wait()?;
             intf.control_out(data, CONTROL_TIMEOUT).wait()?;
         }
         Ok(())
