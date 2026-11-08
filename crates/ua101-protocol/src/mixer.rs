@@ -68,12 +68,13 @@ pub mod slot {
     pub const LINK: u8 = 0x01;
     /// Monitor ON/OFF (for OUTPUT strips: send this output to MONITOR OUT).
     pub const ON: u8 = 0x02;
-    /// Pan / balance, 16-bit, sent as 4 nibbles. **Observed on hardware**:
-    /// sweeping it moves the channel between left and right; `0x4000` is
-    /// the centre.
-    pub const PAN: u8 = 0x03;
-    /// Volume, 24-bit, sent as 6 nibbles (inferred).
-    pub const VOLUME: u8 = 0x07;
+    /// Volume, 16-bit, sent as 4 nibbles. **Observed on hardware**: it
+    /// changes the level of that one channel (on a stereo pair this sounds
+    /// like a balance shift).
+    pub const VOLUME: u8 = 0x03;
+    /// 24-bit parameter, 6 nibbles; most likely pan. Writing it did not
+    /// change the level on hardware. Value format unknown.
+    pub const PAN: u8 = 0x07;
 }
 
 /// Splits `value` into `N` nibbles, most significant first, as the driver
@@ -110,23 +111,20 @@ pub fn set_link(bus: Bus, pair: u8, linked: bool) -> Message {
     sysex::dt1(channel_address(bus, pair * 2, slot::LINK), &[linked as u8])
 }
 
-/// Centre position of [`set_pan`].
-pub const PAN_CENTER: u16 = 0x4000;
-
-/// Channel pan / balance (driver sub-command 24): `0x0000` full left,
-/// [`PAN_CENTER`], up to `0x7fff` full right.
-pub fn set_pan(bus: Bus, channel: u8, value: u16) -> Message {
+/// Channel volume (driver sub-command 24), 16-bit. The panel assumes
+/// unity gain at `0x4000` (max `0x7fff` = +6 dB); not yet confirmed.
+pub fn set_volume(bus: Bus, channel: u8, value: u16) -> Message {
     sysex::dt1(
-        channel_address(bus, channel, slot::PAN),
+        channel_address(bus, channel, slot::VOLUME),
         &nibbles::<4>(value as u32),
     )
 }
 
-/// Channel volume, 24-bit (driver sub-command 25). The scale is not
-/// confirmed yet.
-pub fn set_volume(bus: Bus, channel: u8, value: u32) -> Message {
+/// Channel pan (driver sub-command 25), raw 24-bit value. The encoding is
+/// unknown, so callers must not guess values for users.
+pub fn set_pan_raw(bus: Bus, channel: u8, value: u32) -> Message {
     sysex::dt1(
-        channel_address(bus, channel, slot::VOLUME),
+        channel_address(bus, channel, slot::PAN),
         &nibbles::<6>(value & 0x00ff_ffff),
     )
 }
@@ -224,13 +222,13 @@ mod tests {
 
     #[test]
     fn channel_addresses() {
-        let m = set_pan(Bus::Input, 3, 0x7fff);
+        let m = set_volume(Bus::Input, 3, 0x7fff);
         let d = parse_dt1(m.as_bytes()).unwrap();
         assert_eq!(d.address, [0x00, 0x04, 0x03, 0x03]);
         assert_eq!(d.data, &[0x7, 0xf, 0xf, 0xf]);
         assert_eq!(m.as_bytes().len(), 16);
 
-        let m = set_volume(Bus::Output, 9, 0x80_0000);
+        let m = set_pan_raw(Bus::Output, 9, 0x80_0000);
         let d = parse_dt1(m.as_bytes()).unwrap();
         assert_eq!(d.address, [0x00, 0x05, 0x09, 0x07]);
         assert_eq!(d.data, &[0x8, 0, 0, 0, 0, 0]);

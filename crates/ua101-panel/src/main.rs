@@ -36,26 +36,20 @@ const STRIP_WIDTH: f32 = 40.0;
 /// Fader range in dB. The bottom position means -inf (muted).
 const FADER_MIN_DB: f32 = -60.0;
 const FADER_MAX_DB: f32 = 6.0;
-/// Device value for 0 dB. Hypothesis: a linear 24-bit gain with unity at
-/// 0x800000, so the 24-bit maximum 0xffffff sits at +6 dB. Not yet
-/// verified on hardware.
-const VOLUME_UNITY: f32 = 8_388_608.0;
+/// Device value for 0 dB. Hypothesis: a linear 16-bit gain with unity at
+/// 0x4000, so the 16-bit maximum 0x7fff sits at +6 dB. The address (slot
+/// 03) is confirmed on hardware; the scale is not.
+const VOLUME_UNITY: f32 = 16_384.0;
 
-/// Converts a fader position in dB to the 24-bit device value.
-fn volume_raw(db: f32) -> u32 {
+/// Converts a fader position in dB to the 16-bit device value.
+fn volume_raw(db: f32) -> u16 {
     if db <= FADER_MIN_DB {
         0
     } else {
         (VOLUME_UNITY * 10f32.powf(db / 20.0))
             .round()
-            .clamp(0.0, 16_777_215.0) as u32
+            .clamp(0.0, 32_767.0) as u16
     }
-}
-
-/// Converts a pan position (-64 = left, 0 = centre, +63 = right) to the
-/// 16-bit device value; centre `0x4000` was confirmed on hardware.
-fn pan_raw(pan: i32) -> u16 {
-    (mixer::PAN_CENTER as i32 + pan * 256).clamp(0, 0x7fff) as u16
 }
 
 fn format_db(db: f32) -> String {
@@ -325,14 +319,8 @@ impl Panel {
                     *l = d[0] != 0;
                 }
             }
-            mixer::slot::PAN if d.len() >= 4 => {
-                let raw = mixer::from_nibbles(&d[..4]) as i32;
-                if let Some(s) = self.mixer.strips[bus].get_mut(ch) {
-                    s.pan = ((raw - mixer::PAN_CENTER as i32) / 256).clamp(-64, 63);
-                }
-            }
-            mixer::slot::VOLUME if d.len() >= 6 => {
-                let raw = mixer::from_nibbles(&d[..6]) as f32;
+            mixer::slot::VOLUME if d.len() >= 4 => {
+                let raw = mixer::from_nibbles(&d[..4]) as f32;
                 if let Some(s) = self.mixer.strips[bus].get_mut(ch) {
                     s.volume_db = if raw <= 0.0 {
                         FADER_MIN_DB
@@ -750,16 +738,6 @@ impl Panel {
                                                         volume_raw(s.volume_db),
                                                     ));
                                                 }
-                                                // Pan is per channel even when linked.
-                                                Change::Pan if t == ch => {
-                                                    st.pan = s.pan;
-                                                    sends.push(mixer::set_pan(
-                                                        bus,
-                                                        t as u8,
-                                                        pan_raw(s.pan),
-                                                    ));
-                                                }
-                                                Change::Pan => {}
                                             }
                                         }
                                     }
@@ -1039,7 +1017,6 @@ impl Panel {
 #[derive(Clone, Copy)]
 enum Change {
     On,
-    Pan,
     Volume,
 }
 
@@ -1099,31 +1076,26 @@ fn strip_ui(ui: &mut egui::Ui, c: &StripCtx, s: &mut Strip) -> Option<Change> {
                 egui::Button::new(RichText::new("SOLO").size(9.0)).min_size(button),
             )
             .on_disabled_hover_text("SOLO address not identified yet");
-            let mut pan = s.pan;
-            let r = ui
-                .add(
-                    egui::DragValue::new(&mut pan)
-                        .range(-64..=63)
-                        .speed(0.5)
-                        .custom_formatter(|v, _| match v as i32 {
-                            0 => "C".into(),
-                            v if v < 0 => format!("L{}", -v),
-                            v => format!("R{v}"),
-                        }),
-                )
-                .on_hover_text("PAN: drag left/right, double-click to centre (00 0b ch 03)");
-            if r.double_clicked() {
-                pan = 0;
-            }
-            if pan != s.pan {
-                s.pan = pan;
-                change = Some(Change::Pan);
-            }
+            ui.add_enabled(
+                false,
+                egui::DragValue::new(&mut s.pan)
+                    .range(-64..=63)
+                    .custom_formatter(|v, _| match v as i32 {
+                        0 => "C".into(),
+                        v if v < 0 => format!("L{}", -v),
+                        v => format!("R{v}"),
+                    }),
+            )
+            .on_disabled_hover_text(
+                "PAN: probably slot 07 (24-bit); its value format is not known yet",
+            );
 
             let mut db = s.volume_db;
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                theme::meter(ui, c.fader_height, c.level, c.metering);
+                if c.bus != Bus::MonitorOut {
+                    theme::meter(ui, c.fader_height, c.level, c.metering);
+                }
                 ui.spacing_mut().slider_width = c.fader_height;
                 let r = ui
                     .add(
@@ -1132,7 +1104,7 @@ fn strip_ui(ui: &mut egui::Ui, c: &StripCtx, s: &mut Strip) -> Option<Change> {
                             .show_value(false),
                     )
                     .on_hover_text(format!(
-                        "VOLUME {} dB (device value {:#08x}, unity 0x800000 assumed; 00 0b ch 07). \
+                        "VOLUME {} dB (device value {:#06x}, unity 0x4000 assumed; 00 0b ch 03). \
                          Double-click: 0 dB",
                         format_db(db),
                         volume_raw(db)

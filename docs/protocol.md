@@ -166,8 +166,13 @@ Channel parameters, `00 (3+bus) ch slot` with bus 0 = MONITOR OUT,
 |------|-----------------|---------|----------|
 | `01` | 1 byte (on `2·pair`) | stereo LINK of a channel pair | inferred |
 | `02` | 1 byte          | monitor ON; for OUTPUT strips, send to MONITOR OUT | inferred |
-| `03` | 16-bit, 4 nibbles | **PAN / balance**, centre `0x4000` | **observed**: sweeping it moved the channel left/right on a real unit |
-| `07` | 24-bit, 6 nibbles | VOLUME | inferred; the panel assumes unity at `0x800000` (max `0xffffff` ≈ +6 dB) |
+| `03` | 16-bit, 4 nibbles | **VOLUME** of that channel | **observed**: changes the level of one channel (on a stereo pair it first sounded like a balance shift); scale unknown, the panel assumes unity at `0x4000` |
+| `07` | 24-bit, 6 nibbles | probably PAN | **observed**: does not change the level; value format unknown |
+
+The driver keeps exactly these three values per channel (`0x22610`,
+`0x22700`, `0x227d0`: offsets +0, +4, +8 of a 12-byte record) plus LINK
+per pair, so SOLO is not a per-channel slot; sub-command 21
+(`00 (n+2) 00 00`) is a candidate.
 
 ### Front-panel status (observed, device)
 
