@@ -17,6 +17,7 @@ checked against the descriptors of a real unit. See [`docs/protocol.md`](docs/pr
 | Audio, 10 outputs / 12 inputs    | ✅ (usbfs) | 🚧 IOKit isoch | 🚧 WinUSB isoch |
 | System audio device (`ua101d` driver daemon) | ✅ PipeWire/ALSA, 10 out / 12 in | 🚧 | 🚧 |
 | Mixer / device panel (Roland SysEx)           | ✅ (addresses partly inferred) | ✅ | ✅ |
+| Patch bay with virtual cables (`ua101d`)      | 🧪 | 🚧 | 🚧 |
 
 ✅ implemented · 🧪 implemented, not yet verified on hardware · 🚧 to do. On Linux, playback and 12-channel recording
 through `ua101d` and PipeWire have been verified on a real unit at 44.1 kHz
@@ -89,6 +90,22 @@ While `ua101d` runs, `ua101-panel` connects to it automatically (status
 `UA101D` in the header) and the card stays available to the system. The
 control socket is `$XDG_RUNTIME_DIR/ua101d.sock`; its line protocol is
 documented in `crates/ua101d/src/control.rs`.
+
+### Patch bay
+
+*Device › PATCH BAY…* in the panel opens a patch bay with virtual cables.
+To route an input to an output, drag from an INPUT jack to an OUTPUT jack.
+Each cable carries one channel. One input can feed several outputs. To
+unplug a cable, or move it to another output, drag its output end. An output
+with a cable plays its input instead of the computer's audio. Outputs
+without a cable are not affected. While the patch bay is OFF it does
+nothing, so it is never in the way.
+
+The routing runs in `ua101d`'s USB engine, which keeps about 8 ms of
+playback queued. It is saved in `~/.local/state/ua101d/patchbay.txt`.
+Scripts can also use it through the socket: `route OUT IN`, `patch on|off|clear`.
+This patch bay is software only. The unit's own patch bay (sub-command 20)
+is routed per channel pair and is not written yet.
 
 ## Usage
 

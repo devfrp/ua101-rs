@@ -234,6 +234,11 @@ table at `0x140092670` (12 entries per group):
 | 1 | `1 7 8 9 10 11 2 3 4 5 6` | `07 08 09 0a 01` |
 | 2 | `0 1 7 8 9 10 11 2 3 4 5 6` | `00 00 00 00 00` |
 
+`ua101d` does not write these values yet. Its patch bay is software only:
+the USB engine copies captured channels into playback channels (see
+`Patchbay` in `crates/ua101-usb/src/stream/mod.rs`). This is a design
+choice, not something the unit does.
+
 Working hypothesis for the codes: `0` none, `1` monitor mix, `2`–`6` WAVE
 OUT pairs 1-2 … 9-10, `7`–`11` INPUT pairs 1-2 … 9-10 (Hard Thru). Group
 0 matches "Initial setting: WAVE OUT n → OUTPUT n"; groups 1 and 2 are

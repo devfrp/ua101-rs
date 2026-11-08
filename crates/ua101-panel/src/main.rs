@@ -8,6 +8,7 @@
 mod daemon;
 mod link;
 mod meters;
+mod patchbay;
 mod theme;
 
 use std::{
@@ -137,13 +138,6 @@ impl Mixer {
     }
 }
 
-/// Output source in the patch bay (encoding inferred).
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Source {
-    Wave,
-    Input,
-}
-
 struct Tone {
     stop: Arc<AtomicBool>,
     thread: JoinHandle<String>,
@@ -168,7 +162,7 @@ struct Panel {
     meters: Option<Meters>,
     front: FrontPanel,
     mixer: Mixer,
-    patch: Vec<Source>,
+    patchbay: patchbay::PatchbayUi,
     dialogs: Dialogs,
     always_on_top: bool,
     status: String,
@@ -200,7 +194,7 @@ impl Panel {
             meters: None,
             front: FrontPanel::default(),
             mixer: Mixer::new(),
-            patch: vec![Source::Wave; 10],
+            patchbay: patchbay::PatchbayUi::new(Bus::Output.channels() as usize),
             dialogs: Dialogs::default(),
             always_on_top: false,
             status: String::new(),
@@ -319,6 +313,26 @@ impl Panel {
         }
     }
 
+    /// Sends a patch bay change to `ua101d`, which routes the audio.
+    #[cfg_attr(not(unix), allow(unused_variables))]
+    fn patch_command(&mut self, c: patchbay::PatchChange) {
+        use patchbay::PatchChange;
+        let line = match c {
+            PatchChange::Enable(true) => "patch on".to_string(),
+            PatchChange::Enable(false) => "patch off".to_string(),
+            PatchChange::Clear => "patch clear".to_string(),
+            PatchChange::Route(o, i) => format!("route {} {}", o + 1, i.map_or(0, |i| i + 1)),
+        };
+        self.log(format!("TX {line}"));
+        #[cfg(unix)]
+        if let Some(d) = &mut self.daemon
+            && !d.command(&line)
+        {
+            self.status = "Lost the connection to ua101d".into();
+            self.daemon = None;
+        }
+    }
+
     /// Updates the local mixer mirror from a parameter value.
     fn apply_state(&mut self, a: [u8; 4], d: &[u8]) {
         // Complete mixer block read from the unit.
@@ -402,6 +416,9 @@ impl Panel {
                     };
                     decay(&mut self.levels_in, inputs);
                     decay(&mut self.levels_out, outputs);
+                }
+                daemon::DaemonEvent::Patch { on, routes } => {
+                    self.patchbay.set_state(on, &routes);
                 }
                 daemon::DaemonEvent::Error(e) => self.status = format!("ua101d: {e}"),
                 daemon::DaemonEvent::Closed => {
@@ -541,7 +558,7 @@ impl Panel {
             });
             ui.menu_button("Device", |ui| {
                 for (flag, label) in [
-                    (&mut self.dialogs.patch_bay, "Set PATCH BAY…"),
+                    (&mut self.dialogs.patch_bay, "PATCH BAY…"),
                     (&mut self.dialogs.memory, "Load / Store Memory of Device…"),
                     (&mut self.dialogs.reset, "Reset Device…"),
                     (&mut self.dialogs.tone, "Test tone…"),
@@ -890,39 +907,22 @@ impl Panel {
         let mut sends = Vec::new();
 
         let mut open = self.dialogs.patch_bay;
+        let mut patch_changes = Vec::new();
         egui::Window::new("PATCH BAY")
             .open(&mut open)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.label("Output source for each OUTPUT. Experimental: value encoding inferred.");
-                egui::Grid::new("patch").num_columns(3).show(ui, |ui| {
-                    for (o, src) in self.patch.iter_mut().enumerate() {
-                        ui.label(format!("OUTPUT {}", o + 1));
-                        let before = *src;
-                        ui.selectable_value(src, Source::Wave, format!("WAVE OUT {}", o + 1));
-                        ui.selectable_value(src, Source::Input, format!("INPUT {}", o + 1));
-                        if *src != before {
-                            sends
-                                .push(mixer::set_patch_bay(o as u8, (*src == Source::Input) as u8));
-                        }
-                        ui.end_row();
-                    }
-                });
-                ui.horizontal(|ui| {
-                    if ui.button("Hard Thru").clicked() {
-                        for (o, s) in self.patch.iter_mut().enumerate() {
-                            *s = Source::Input;
-                            sends.push(mixer::set_patch_bay(o as u8, 1));
-                        }
-                    }
-                    if ui.button("Initial setting").clicked() {
-                        for (o, s) in self.patch.iter_mut().enumerate() {
-                            *s = Source::Wave;
-                            sends.push(mixer::set_patch_bay(o as u8, 0));
-                        }
-                    }
-                });
+                let inputs = if self.levels_in.is_empty() {
+                    12
+                } else {
+                    self.levels_in.len()
+                };
+                let available = self.using_daemon() && self.daemon_connected;
+                patch_changes = self.patchbay.show(ui, inputs, &self.levels_in, available);
             });
+        for c in patch_changes {
+            self.patch_command(c);
+        }
         self.dialogs.patch_bay = open;
 
         let mut open = self.dialogs.memory;

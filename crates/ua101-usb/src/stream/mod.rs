@@ -15,7 +15,7 @@
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
     },
     thread::JoinHandle,
 };
@@ -26,6 +26,76 @@ use crate::{Error, Result, Ua101};
 
 #[cfg(target_os = "linux")]
 mod linux;
+
+/// Most output channels a [`Patchbay`] can route.
+pub const PATCHBAY_OUTPUTS: usize = 32;
+
+/// Software patch bay: routes captured input channels straight to output
+/// channels inside the streaming engine, channel by channel ("virtual
+/// cables"). An output with a cable plays its input instead of the
+/// computer's audio; outputs without a cable are untouched. Disabled, or
+/// with no cables, it changes nothing.
+///
+/// The latency is that of the playback URB queue (about 8 ms with the
+/// default [`StreamConfig`]). Shared with the engine through atomics, so it
+/// can be changed while the stream runs.
+#[derive(Debug)]
+pub struct Patchbay {
+    enabled: AtomicBool,
+    /// Per output: 0 = no cable, `n` = input channel `n - 1`.
+    routes: [AtomicU8; PATCHBAY_OUTPUTS],
+}
+
+impl Default for Patchbay {
+    fn default() -> Self {
+        Self {
+            enabled: AtomicBool::new(false),
+            routes: std::array::from_fn(|_| AtomicU8::new(0)),
+        }
+    }
+}
+
+impl Patchbay {
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
+
+    pub fn set_enabled(&self, on: bool) {
+        self.enabled.store(on, Ordering::Relaxed);
+    }
+
+    /// Input channel (0-based) cabled to `output`, if any.
+    pub fn route(&self, output: usize) -> Option<usize> {
+        let r = self.routes.get(output)?.load(Ordering::Relaxed);
+        (r != 0).then(|| r as usize - 1)
+    }
+
+    /// Cables `input` (0-based) to `output`, or removes the cable with
+    /// `None`. Returns `false` if a channel is out of range.
+    pub fn set_route(&self, output: usize, input: Option<usize>) -> bool {
+        let Some(slot) = self.routes.get(output) else {
+            return false;
+        };
+        let value = match input {
+            None => 0,
+            Some(i) if i < u8::MAX as usize => i as u8 + 1,
+            Some(_) => return false,
+        };
+        slot.store(value, Ordering::Relaxed);
+        true
+    }
+
+    pub fn clear(&self) {
+        for r in &self.routes {
+            r.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// Enabled with at least one cable.
+    pub fn is_active(&self) -> bool {
+        self.is_enabled() && self.routes.iter().any(|r| r.load(Ordering::Relaxed) != 0)
+    }
+}
 
 /// Streaming parameters.
 #[derive(Debug, Clone)]
@@ -39,6 +109,9 @@ pub struct StreamConfig {
     pub ring_frames: usize,
     /// Give interfaces back to the kernel driver when the stream stops.
     pub reattach_kernel_driver: bool,
+    /// Software patch bay applied by the engine. Keep a clone of the `Arc`
+    /// to change the routing while the stream runs.
+    pub patchbay: Arc<Patchbay>,
 }
 
 impl Default for StreamConfig {
@@ -48,6 +121,7 @@ impl Default for StreamConfig {
             packets_per_urb: 8,
             ring_frames: 96_000,
             reattach_kernel_driver: true,
+            patchbay: Arc::default(),
         }
     }
 }
@@ -270,5 +344,25 @@ pub(crate) fn start(
         Err(Error::Unsupported(
             "isochronous streaming is only implemented for Linux (usbfs) so far",
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn patchbay_routes() {
+        let p = Patchbay::default();
+        assert!(!p.is_active());
+        assert!(p.set_route(2, Some(0)));
+        assert!(!p.is_active(), "disabled until switched on");
+        p.set_enabled(true);
+        assert!(p.is_active());
+        assert_eq!(p.route(2), Some(0));
+        assert_eq!(p.route(3), None);
+        assert!(!p.set_route(PATCHBAY_OUTPUTS, Some(0)));
+        assert!(p.set_route(2, None));
+        assert!(!p.is_active());
     }
 }

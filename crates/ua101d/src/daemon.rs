@@ -17,7 +17,7 @@ use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use log::{error, info, warn};
 use ua101_usb::{
-    MidiPort, StreamConfig, Ua101, list_devices,
+    MidiPort, Patchbay, StreamConfig, Ua101, list_devices,
     protocol::{
         mixer::{self, MixerState},
         sysex,
@@ -27,7 +27,7 @@ use ua101_usb::{
 use crate::{
     alsa::{self, Config, Direction, Pcm},
     bridge::{self, Levels, PumpConfig, SharedLevels},
-    control::{self, Clients, Request, State},
+    control::{self, Clients, PatchCommand, Request, State},
 };
 
 #[derive(Parser, Debug)]
@@ -82,6 +82,10 @@ struct Shared {
     info: String,
     /// Full monitor-mixer state, re-sent whenever the unit needs it.
     mixer: MixerState,
+    /// Software patch bay, shared with the USB engine.
+    patchbay: Arc<Patchbay>,
+    /// Output channels of the running stream (10 on the UA-101).
+    outputs: usize,
 }
 
 /// Requests the 256-byte mixer block and waits up to one second for it.
@@ -133,6 +137,25 @@ impl Shared {
             self.clients
                 .send_to(id, &format!("dt1 {} {}", control::hex(a), control::hex(d)));
         }
+        self.clients
+            .send_to(id, &control::patch_line(&self.patchbay, self.outputs));
+    }
+
+    fn patch(&mut self, cmd: PatchCommand) {
+        let p = &self.patchbay;
+        match cmd {
+            PatchCommand::Enable(on) => p.set_enabled(on),
+            PatchCommand::Clear => p.clear(),
+            PatchCommand::Route(o, i) => {
+                if o >= self.outputs || !p.set_route(o, i) {
+                    self.clients.broadcast("err no such output");
+                    return;
+                }
+            }
+        }
+        let line = control::patch_line(p, self.outputs);
+        control::save_patch(&control::patch_path(), &line);
+        self.clients.broadcast(&line);
     }
 
     fn set_info(&mut self, info: String) {
@@ -169,7 +192,14 @@ pub fn run() -> Result<()> {
         levels: Arc::new(Mutex::new(Levels::default())),
         info: "info connected=0".into(),
         mixer: MixerState::initial(),
+        patchbay: Arc::default(),
+        outputs: 10,
     };
+    if let Ok(line) = std::fs::read_to_string(control::patch_path()) {
+        if control::apply_patch_line(&shared.patchbay, line.trim()) {
+            info!("patch bay: {}", line.trim());
+        }
+    }
     // Saved settings (with --restore) override the initial mixer state.
     let saved: Vec<_> = shared.state.iter().map(|(a, d)| (*a, d.clone())).collect();
     for (a, d) in saved {
@@ -211,6 +241,7 @@ fn idle(shared: &mut Shared, duration: Duration) {
         while let Ok(req) = shared.requests.try_recv() {
             match req {
                 Request::Hello(id) => shared.hello(id),
+                Request::Patch(c) => shared.patch(c),
                 Request::Write(..) | Request::Read(..) => {
                     shared.clients.broadcast("err no UA-101 connected")
                 }
@@ -241,6 +272,7 @@ fn session(args: &Args, shared: &mut Shared) -> Result<()> {
     let stream = dev
         .start_stream(StreamConfig {
             ring_frames: 16_384,
+            patchbay: shared.patchbay.clone(),
             ..StreamConfig::default()
         })
         .context("cannot start USB streaming")?;
@@ -248,6 +280,7 @@ fn session(args: &Args, shared: &mut Shared) -> Result<()> {
     let play = *ctl.playback_format();
     let capt = *ctl.capture_format();
     let rate = capt.sample_rate;
+    shared.outputs = play.channels as usize;
     let mut midi = dev.open_midi().context("cannot open the control port")?;
 
     let pcm_cfg = |channels: u8| Config {
@@ -375,6 +408,7 @@ fn session(args: &Args, shared: &mut Shared) -> Result<()> {
         while let Ok(req) = shared.requests.try_recv() {
             match req {
                 Request::Hello(id) => shared.hello(id),
+                Request::Patch(c) => shared.patch(c),
                 Request::Read(a, size) => {
                     let m = sysex::rq1(a, size);
                     if let Err(e) = midi.send_control(&m) {

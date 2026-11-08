@@ -25,7 +25,9 @@ mod usbfs;
 pub use device::{Ua101, list_devices, reattach_kernel_driver};
 pub use error::{Error, Result};
 pub use midi::MidiPort;
-pub use stream::{DuplexStream, StreamConfig, StreamControl, StreamStats};
+pub use stream::{
+    DuplexStream, PATCHBAY_OUTPUTS, Patchbay, StreamConfig, StreamControl, StreamStats,
+};
 
 pub use nusb::{DeviceInfo, Speed};
 

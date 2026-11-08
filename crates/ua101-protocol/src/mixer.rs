@@ -297,10 +297,12 @@ pub fn set_bus_parameter(n: u8, value: u8) -> Message {
     sysex::dt1([0x00, n + 2, 0x00, 0x00], &[value])
 }
 
-/// Patch bay: source of OUTPUT `output` (0-based; driver sub-command 12,
-/// address `00 00 n 03`).
-pub fn set_patch_bay(output: u8, source: u8) -> Message {
-    sysex::dt1([0x00, 0x00, output, 0x03], &[source])
+/// Hardware patch bay (driver sub-command 20, address `00 02 group pair`,
+/// mirrored at block bytes `07`–`15`): source code for output pair `pair`
+/// (0–4) of `group` (0–2). Inferred from the Windows control panel and not
+/// yet sent to a unit; see `docs/protocol.md` for the code tables.
+pub fn set_patch_bay(group: u8, pair: u8, source: u8) -> Message {
+    sysex::dt1([0x00, 0x02, group, pair], &[source])
 }
 
 /// Device memory operations at `00 00 00 0x` (driver sub-commands 9–11).

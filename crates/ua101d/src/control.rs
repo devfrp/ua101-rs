@@ -7,7 +7,12 @@
 //!                   rq1 AA AA AA AA SIZE        read device memory (SIZE in
 //!                                               decimal); replies arrive as dt1
 //!                   hello                       request info + full state
+//!                   patch on|off|clear          software patch bay
+//!                   route OUT IN                cable INPUT IN to OUTPUT OUT
+//!                                               (1-based; IN 0 removes it)
 //! daemon → client   info rate=R inputs=I outputs=O connected=0|1
+//!                   patch on|off R,R,…          patch bay state: per output,
+//!                                               the cabled input (0 = none)
 //!                   dt1 AA AA AA AA DD [DD…]   parameter value (state dump,
 //!                                               echo of writes, or a change
 //!                                               reported by the unit)
@@ -40,6 +45,65 @@ pub enum Request {
     /// are broadcast like any other parameter.
     Read([u8; 4], u32),
     Hello(u64),
+    Patch(PatchCommand),
+}
+
+/// Software patch bay commands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PatchCommand {
+    Enable(bool),
+    Clear,
+    /// 0-based output, 0-based input (`None` removes the cable).
+    Route(usize, Option<usize>),
+}
+
+pub fn parse_patch(line: &str) -> Option<PatchCommand> {
+    let mut it = line.split_whitespace();
+    let cmd = match (it.next()?, it.next()?) {
+        ("patch", "on") => PatchCommand::Enable(true),
+        ("patch", "off") => PatchCommand::Enable(false),
+        ("patch", "clear") => PatchCommand::Clear,
+        ("route", out) => {
+            let out: usize = out.parse().ok()?;
+            let input: usize = it.next()?.parse().ok()?;
+            PatchCommand::Route(out.checked_sub(1)?, input.checked_sub(1))
+        }
+        _ => return None,
+    };
+    it.next().is_none().then_some(cmd)
+}
+
+/// `patch on|off R,R,…` for `outputs` outputs.
+pub fn patch_line(p: &ua101_usb::Patchbay, outputs: usize) -> String {
+    let routes: Vec<String> = (0..outputs)
+        .map(|o| p.route(o).map_or(0, |i| i + 1).to_string())
+        .collect();
+    format!(
+        "patch {} {}",
+        if p.is_enabled() { "on" } else { "off" },
+        routes.join(",")
+    )
+}
+
+/// Applies a `patch on|off R,R,…` line (as saved by [`save_patch`]).
+pub fn apply_patch_line(p: &ua101_usb::Patchbay, line: &str) -> bool {
+    let mut it = line.split_whitespace();
+    let (Some("patch"), Some(state), Some(routes)) = (it.next(), it.next(), it.next()) else {
+        return false;
+    };
+    let on = match state {
+        "on" => true,
+        "off" => false,
+        _ => return false,
+    };
+    let parsed: Option<Vec<usize>> = routes.split(',').map(|r| r.parse().ok()).collect();
+    let Some(parsed) = parsed else { return false };
+    p.clear();
+    for (o, r) in parsed.into_iter().enumerate() {
+        p.set_route(o, r.checked_sub(1));
+    }
+    p.set_enabled(on);
+    true
 }
 
 /// Parameter mirror keyed by address.
@@ -131,6 +195,14 @@ pub fn listen(path: &Path, clients: Clients, requests: Sender<Request>) -> std::
                             let line = line.trim();
                             if line == "hello" {
                                 let _ = requests.send(Request::Hello(id));
+                            } else if line.starts_with("patch") || line.starts_with("route") {
+                                match parse_patch(line) {
+                                    Some(c) => {
+                                        let _ = requests.send(Request::Patch(c));
+                                    }
+                                    None => clients
+                                        .send_to(id, "err usage: patch on|off|clear, route OUT IN"),
+                                }
                             } else if let Some(rest) = line.strip_prefix("rq1 ") {
                                 let mut it = rest.split_whitespace();
                                 let addr: Option<Vec<u8>> = it
@@ -169,6 +241,19 @@ pub fn state_path() -> PathBuf {
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
         .unwrap_or_else(|| PathBuf::from("/tmp"));
     base.join("ua101d").join("mixer.txt")
+}
+
+/// Where the software patch bay is saved. It only routes audio inside the
+/// daemon, so it is always restored.
+pub fn patch_path() -> PathBuf {
+    state_path().with_file_name("patchbay.txt")
+}
+
+pub fn save_patch(path: &Path, line: &str) {
+    if let Some(dir) = path.parent() {
+        let _ = fs::create_dir_all(dir);
+    }
+    let _ = fs::write(path, format!("{line}\n"));
 }
 
 /// Loads saved parameters (`AA AA AA AA = DD …` per line).
@@ -219,6 +304,34 @@ mod tests {
         );
         assert_eq!(parse_dt1_args("00 04 00"), None);
         assert_eq!(parse_dt1_args("00 04 00 03 80"), None);
+    }
+
+    #[test]
+    fn parses_patch_commands() {
+        assert_eq!(parse_patch("patch on"), Some(PatchCommand::Enable(true)));
+        assert_eq!(parse_patch("patch clear"), Some(PatchCommand::Clear));
+        assert_eq!(
+            parse_patch("route 3 1"),
+            Some(PatchCommand::Route(2, Some(0)))
+        );
+        assert_eq!(parse_patch("route 3 0"), Some(PatchCommand::Route(2, None)));
+        assert_eq!(parse_patch("route 0 1"), None);
+        assert_eq!(parse_patch("route 3"), None);
+        assert_eq!(parse_patch("patch maybe"), None);
+    }
+
+    #[test]
+    fn patch_line_roundtrip() {
+        let p = ua101_usb::Patchbay::default();
+        p.set_route(1, Some(4));
+        p.set_enabled(true);
+        let line = patch_line(&p, 4);
+        assert_eq!(line, "patch on 0,5,0,0");
+        let q = ua101_usb::Patchbay::default();
+        assert!(apply_patch_line(&q, &line));
+        assert!(q.is_enabled());
+        assert_eq!(q.route(1), Some(4));
+        assert_eq!(q.route(0), None);
     }
 
     #[test]

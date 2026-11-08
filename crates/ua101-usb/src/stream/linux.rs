@@ -20,7 +20,7 @@ use ua101_protocol::{
     pcm::{self, WireFormat},
 };
 
-use super::{Counters, StreamConfig};
+use super::{Counters, PATCHBAY_OUTPUTS, Patchbay, StreamConfig};
 use crate::{
     Error, Result, Ua101,
     usbfs::{IsoUrb, MAX_ISO_PACKETS, UsbFs},
@@ -29,6 +29,12 @@ use crate::{
 /// How long playback waits for the first capture packets before falling
 /// back to the nominal rate.
 const FEEDBACK_WARMUP: Duration = Duration::from_millis(200);
+
+/// Frames of silence the patch bay keeps queued so that capture and
+/// playback completions arriving in bursts do not starve it (~1 ms).
+const THRU_CUSHION: usize = 48;
+/// Above this many queued frames the oldest are dropped (~3 ms).
+const THRU_MAX: usize = 144;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Kind {
@@ -65,6 +71,10 @@ pub(crate) struct Engine {
     counters: Arc<Counters>,
     scratch: Vec<i32>,
     lengths: Vec<u32>,
+    patchbay: Arc<Patchbay>,
+    /// Captured frames waiting to be played through the patch bay.
+    thru: VecDeque<i32>,
+    thru_frame: Vec<i32>,
 }
 
 impl Engine {
@@ -160,6 +170,9 @@ impl Engine {
             counters,
             scratch: vec![0; cap_packet_bytes.max(play_packet_bytes) * max_channels.max(1)],
             lengths: vec![0; packets_per_urb],
+            patchbay: config.patchbay.clone(),
+            thru: VecDeque::with_capacity((THRU_MAX + 8) * capture.channels as usize),
+            thru_frame: vec![0; capture.channels as usize],
         })
     }
 
@@ -258,6 +271,12 @@ impl Engine {
         let mut offset = 0usize;
         let mut total_frames = 0u64;
         let mut overruns = 0u64;
+        let thru = self.patchbay.is_active() && channels > 0;
+        if !thru {
+            self.thru.clear();
+        } else if self.thru.is_empty() {
+            self.thru.resize(THRU_CUSHION * channels, 0);
+        }
         for desc in slot.urb.packets() {
             let start = offset;
             offset += desc.length as usize;
@@ -278,6 +297,11 @@ impl Engine {
             let samples = frames * channels;
             let bytes = &slot.buffer[start..start + frames * frame_bytes];
             let n = pcm::decode(self.cap_wire, bytes, &mut self.scratch[..samples]);
+            if thru {
+                self.thru.extend(&self.scratch[..n]);
+                let excess = self.thru.len().saturating_sub(THRU_MAX * channels);
+                self.thru.drain(..excess - excess % channels);
+            }
             if self.cap_tx.slots() >= n {
                 for &s in &self.scratch[..n] {
                     let _ = self.cap_tx.push(s);
@@ -315,6 +339,19 @@ impl Engine {
         let mut offset = 0usize;
         let mut total_frames = 0u64;
         let mut underruns = 0u64;
+        // Snapshot of the cables for this URB: output -> input + 1.
+        let mut routes = [0u8; PATCHBAY_OUTPUTS];
+        let cap_channels = self.capture.channels as usize;
+        let thru = self.patchbay.is_active() && cap_channels > 0;
+        if thru {
+            for (o, r) in routes.iter_mut().enumerate().take(channels) {
+                *r = self
+                    .patchbay
+                    .route(o)
+                    .filter(|&i| i < cap_channels)
+                    .map_or(0, |i| i as u8 + 1);
+            }
+        }
         for i in 0..self.packets_per_urb {
             let frames = self
                 .feedback
@@ -335,6 +372,9 @@ impl Engine {
             }
             if self.playback_primed && available < samples && channels > 0 {
                 underruns += ((samples - available) / channels) as u64;
+            }
+            if thru {
+                self.play_through(&routes[..channels.min(PATCHBAY_OUTPUTS)], frames);
             }
             let bytes = frames * frame_bytes;
             let slot = &mut self.slots[tag];
@@ -361,6 +401,28 @@ impl Engine {
                 .fetch_add(underruns, Ordering::Relaxed);
         }
         Ok(())
+    }
+
+    /// Replaces the cabled output channels of the first `frames` frames in
+    /// `scratch` with captured input samples.
+    fn play_through(&mut self, routes: &[u8], frames: usize) {
+        let channels = self.playback.channels as usize;
+        let cap_channels = self.thru_frame.len();
+        for f in 0..frames {
+            if self.thru.len() >= cap_channels {
+                for s in &mut self.thru_frame {
+                    *s = self.thru.pop_front().unwrap_or(0);
+                }
+            } else {
+                self.thru_frame.fill(0);
+            }
+            let out = &mut self.scratch[f * channels..(f + 1) * channels];
+            for (o, &r) in routes.iter().enumerate() {
+                if r != 0 {
+                    out[o] = self.thru_frame[r as usize - 1];
+                }
+            }
+        }
     }
 
     /// Cancels every in-flight URB and waits for the kernel to return them.

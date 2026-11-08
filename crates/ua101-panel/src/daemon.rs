@@ -12,9 +12,21 @@ use std::{
 use eframe::egui;
 
 pub enum DaemonEvent {
-    Info { rate: Option<u32>, connected: bool },
+    Info {
+        rate: Option<u32>,
+        connected: bool,
+    },
     Data([u8; 4], Vec<u8>),
-    Levels { inputs: Vec<f32>, outputs: Vec<f32> },
+    Levels {
+        inputs: Vec<f32>,
+        outputs: Vec<f32>,
+    },
+    /// Software patch bay: enabled, and per output the cabled input
+    /// (1-based, 0 = none).
+    Patch {
+        on: bool,
+        routes: Vec<usize>,
+    },
     Error(String),
     Closed,
 }
@@ -61,6 +73,14 @@ fn parse_line(line: &str) -> Option<DaemonEvent> {
                 outputs: parse_levels(o),
             })
         }
+        "patch" => {
+            let (state, routes) = rest.split_once(' ')?;
+            let routes: Option<Vec<usize>> = routes.split(',').map(|r| r.parse().ok()).collect();
+            Some(DaemonEvent::Patch {
+                on: state == "on",
+                routes: routes?,
+            })
+        }
         "err" => Some(DaemonEvent::Error(rest.to_string())),
         _ => None,
     }
@@ -98,6 +118,11 @@ impl DaemonLink {
         Some(Self { writer, events })
     }
 
+    /// Sends a raw command line (`patch on`, `route 3 1`…).
+    pub fn command(&mut self, line: &str) -> bool {
+        writeln!(self.writer, "{line}").is_ok()
+    }
+
     pub fn write(&mut self, address: [u8; 4], data: &[u8]) -> bool {
         let hex: Vec<String> = address
             .iter()
@@ -125,6 +150,13 @@ mod tests {
             Some(DaemonEvent::Data(a, d)) => {
                 assert_eq!(a, [0, 1, 0, 5]);
                 assert_eq!(d, vec![1]);
+            }
+            _ => panic!(),
+        }
+        match parse_line("patch on 0,3,0") {
+            Some(DaemonEvent::Patch { on, routes }) => {
+                assert!(on);
+                assert_eq!(routes, vec![0, 3, 0]);
             }
             _ => panic!(),
         }
