@@ -4,6 +4,8 @@
 //!
 //! ```text
 //! client → daemon   dt1 AA AA AA AA DD [DD…]   write device parameters
+//!                   rq1 AA AA AA AA SIZE        read device memory (SIZE in
+//!                                               decimal); replies arrive as dt1
 //!                   hello                       request info + full state
 //! daemon → client   info rate=R inputs=I outputs=O connected=0|1
 //!                   dt1 AA AA AA AA DD [DD…]   parameter value (state dump,
@@ -34,6 +36,9 @@ use std::{
 /// A request from a client.
 pub enum Request {
     Write([u8; 4], Vec<u8>),
+    /// Roland RQ1 data request; the unit answers with DT1 messages, which
+    /// are broadcast like any other parameter.
+    Read([u8; 4], u32),
     Hello(u64),
 }
 
@@ -126,6 +131,20 @@ pub fn listen(path: &Path, clients: Clients, requests: Sender<Request>) -> std::
                             let line = line.trim();
                             if line == "hello" {
                                 let _ = requests.send(Request::Hello(id));
+                            } else if let Some(rest) = line.strip_prefix("rq1 ") {
+                                let mut it = rest.split_whitespace();
+                                let addr: Option<Vec<u8>> = it
+                                    .by_ref()
+                                    .take(4)
+                                    .map(|b| u8::from_str_radix(b, 16).ok().filter(|v| *v < 0x80))
+                                    .collect();
+                                match (addr, it.next().and_then(|s| s.parse::<u32>().ok())) {
+                                    (Some(a), Some(size)) if a.len() == 4 => {
+                                        let _ = requests
+                                            .send(Request::Read([a[0], a[1], a[2], a[3]], size));
+                                    }
+                                    _ => clients.send_to(id, "err usage: rq1 AA AA AA AA SIZE"),
+                                }
                             } else if let Some(rest) = line.strip_prefix("dt1 ") {
                                 match parse_dt1_args(rest) {
                                     Some((a, d)) => {

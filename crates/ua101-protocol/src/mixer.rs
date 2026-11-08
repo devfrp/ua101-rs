@@ -218,10 +218,76 @@ impl MixerState {
             for ch in 0..n {
                 let c = self.channels[i][ch];
                 f(set_mute(bus, ch as u8, c.mute));
-                f(set_pan(bus, ch as u8, c.pan));
+                // MONITOR OUT has no pan in the unit's mixer memory.
+                if bus != Bus::MonitorOut {
+                    f(set_pan(bus, ch as u8, c.pan));
+                }
                 f(set_volume(bus, ch as u8, c.volume));
             }
         }
+    }
+}
+
+/// Address of the complete mixer memory block. The unit answers an RQ1
+/// for it with one 256-byte DT1 (**observed**), and the Windows driver sends
+/// the same block to restore the whole mixer (sub-commands 8 and 13).
+pub const BLOCK_ADDRESS: [u8; 4] = [0x02, 0x00, 0x00, 0x00];
+/// Size of the mixer block.
+pub const BLOCK_SIZE: usize = 256;
+
+/// Offsets in the mixer block (from the driver's serialiser `0x228a0`,
+/// confirmed by reading a unit back after writing known values).
+mod block {
+    /// LINK bits, one per pair, 4 per byte: MONITOR OUT, INPUT, OUTPUT.
+    pub const LINK: [usize; 3] = [0x18, 0x19, 0x1b];
+    /// MUTE bits, one per channel, 4 per byte.
+    pub const MUTE: [usize; 3] = [0x1d, 0x1e, 0x21];
+    /// PAN, 4 nibbles per channel (MONITOR OUT has none).
+    pub const PAN: [Option<usize>; 3] = [None, Some(0x24), Some(0x4c)];
+    /// VOLUME, 6 nibbles per channel.
+    pub const VOLUME: [usize; 3] = [0x74, 0x80, 0xbc];
+}
+
+fn get_bit(b: &[u8], base: usize, i: usize) -> bool {
+    b[base + i / 4] & (1 << (i % 4)) != 0
+}
+
+impl MixerState {
+    /// Decodes the channel part of a mixer block read from the unit.
+    pub fn from_block(b: &[u8]) -> Option<Self> {
+        if b.len() < BLOCK_SIZE {
+            return None;
+        }
+        let mut s = Self::initial();
+        for bus in Bus::ALL {
+            let i = bus.index() as usize;
+            for pair in 0..bus.channels() as usize / 2 {
+                s.links[i][pair] = get_bit(b, block::LINK[i], pair);
+            }
+            for ch in 0..bus.channels() as usize {
+                let c = &mut s.channels[i][ch];
+                c.mute = get_bit(b, block::MUTE[i], ch);
+                if let Some(base) = block::PAN[i] {
+                    c.pan = from_nibbles(&b[base + 4 * ch..base + 4 * ch + 4]) as u16;
+                }
+                let v = block::VOLUME[i] + 6 * ch;
+                c.volume = from_nibbles(&b[v..v + 6]);
+            }
+        }
+        Some(s)
+    }
+
+    /// `true` when nothing can be heard: every OUTPUT and MONITOR OUT
+    /// channel muted or at zero volume (the state a unit starts in with
+    /// SOFT CTRL on).
+    pub fn is_silent(&self) -> bool {
+        let silent = |bus: Bus| {
+            let i = bus.index() as usize;
+            self.channels[i][..bus.channels() as usize]
+                .iter()
+                .all(|c| c.mute || c.volume == 0)
+        };
+        silent(Bus::MonitorOut) || silent(Bus::Output)
     }
 }
 
@@ -350,14 +416,18 @@ mod tests {
             volume: 0,
         }; 10]; 3];
         rebuilt.links = [[false; 5]; 3];
+        // MONITOR OUT has no pan on the unit, so it is not sent.
+        let mon = Bus::MonitorOut.index() as usize;
+        rebuilt.channels[mon][0].pan = initial.channels[mon][0].pan;
+        rebuilt.channels[mon][1].pan = initial.channels[mon][1].pan;
         let mut count = 0;
         initial.for_each_message(|m| {
             let d = parse_dt1(m.as_bytes()).unwrap();
             assert!(rebuilt.apply(d.address, d.data));
             count += 1;
         });
-        // 10+10+2 strips × 3 parameters + 5+5+1 links.
-        assert_eq!(count, 22 * 3 + 11);
+        // 10+10+2 strips × 3 parameters (no pan on MONITOR OUT) + 5+5+1 links.
+        assert_eq!(count, 22 * 3 - 2 + 11);
         // MONITOR OUT only has 2 channels; compare what was sent.
         for bus in Bus::ALL {
             let i = bus.index() as usize;
@@ -365,6 +435,28 @@ mod tests {
                 assert_eq!(rebuilt.channels[i][ch], initial.channels[i][ch]);
             }
         }
+    }
+
+    #[test]
+    fn decodes_block_read_from_unit() {
+        // Block read back from a real unit after sending the initial state.
+        let hex = include_str!("../tests/data/mixer_block.txt");
+        let b: std::vec::Vec<u8> = hex
+            .split_whitespace()
+            .map(|x| u8::from_str_radix(x, 16).unwrap())
+            .collect();
+        let s = MixerState::from_block(&b).unwrap();
+        assert_eq!(s, MixerState::initial());
+        assert!(!s.is_silent());
+    }
+
+    #[test]
+    fn silent_detection() {
+        let mut s = MixerState::initial();
+        let mon = Bus::MonitorOut.index() as usize;
+        s.channels[mon][0].mute = true;
+        s.channels[mon][1].volume = 0;
+        assert!(s.is_silent());
     }
 
     #[test]

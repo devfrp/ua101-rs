@@ -321,6 +321,24 @@ impl Panel {
 
     /// Updates the local mixer mirror from a parameter value.
     fn apply_state(&mut self, a: [u8; 4], d: &[u8]) {
+        // Complete mixer block read from the unit.
+        if a == mixer::BLOCK_ADDRESS {
+            if let Some(m) = mixer::MixerState::from_block(d) {
+                for bus in Bus::ALL {
+                    let i = bus.index() as usize;
+                    for (ch, st) in self.mixer.strips[i].iter_mut().enumerate() {
+                        let c = m.channels[i][ch];
+                        st.on = !c.mute;
+                        st.pan = pan_from_raw(c.pan);
+                        st.volume_db = volume_db(c.volume);
+                    }
+                    for (p, l) in self.mixer.links[i].iter_mut().enumerate() {
+                        *l = m.links[i][p];
+                    }
+                }
+            }
+            return;
+        }
         if a[0] != 0 || !(0x03..=0x05).contains(&a[1]) || d.is_empty() {
             return;
         }
@@ -1112,7 +1130,8 @@ fn strip_ui(ui: &mut egui::Ui, c: &StripCtx, s: &mut Strip) -> Option<Change> {
             .on_disabled_hover_text("SOLO address not identified yet");
             let mut pan = s.pan;
             let r = ui
-                .add(
+                .add_enabled(
+                    c.bus != Bus::MonitorOut,
                     egui::DragValue::new(&mut pan)
                         .range(-64..=63)
                         .speed(0.5)

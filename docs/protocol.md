@@ -198,13 +198,35 @@ The panel uses sub-commands 6 and 20–26 for its mixer controls. Which UI
 control maps to which address, and the value ranges, are **not yet known**:
 the plan is to read the device's memory with RQ1 and correlate.
 
-### Bulk mixer block and panel calls (observed, static; work in progress)
+### Mixer memory block `02 00 00 00` (observed, static + device)
 
-- Sub-commands 8 and 13 send one 268-byte DT1 at address `02 xx 00 00`
-  with 256 data bytes (`0x210e0` header, `0x21150` finaliser). The data is
-  built by `0x228a0` / `0x21e20` (with `0x22090`, `0x22460`, `0x219f0`),
-  using 5-byte groups. This is the complete mixer memory image; its layout
-  is still being decoded.
+The unit answers `RQ1 02 00 00 00`, size 256, with one DT1 holding the
+whole mixer (**observed**). The Windows driver sends the same block to
+restore the mixer (sub-commands 8 and 13; serialiser `0x228a0` with
+`0x219f0`, `0x21e20`, `0x22090`, `0x22460`, `0x212a0`, `0x21320`,
+`0x21210`/`0x218b0`/`0x21950`, `0x213a0`). Writing known values with
+single DT1s and reading the block back gave exactly those values, which
+confirms the layout below (offsets in the 256 data bytes):
+
+| Offset | Content |
+|--------|---------|
+| `00`–`03` | 4 bytes (`0x219f0`); read back as `01 01 01 01` |
+| `04`–`06` | bit fields (`0x21e20`): `04` bit 3 flag + bits 0–2 value, `05` bits 0–2 value, `06` bits 0/1/2 flags |
+| `07`–`15` | 3 groups of 5 bytes, the sub-command 20 values (`00 02 a b`); read back as `02 03 04 05 06`, `07 08 09 0a 01`, `00 00 00 00 00` |
+| `16`, `17` | INPUT / OUTPUT bus value (sub-command 21) |
+| `18`, `19`–`1a`, `1b`–`1c` | LINK bits (bit `pair % 4` of byte `base + pair / 4`): MONITOR OUT, INPUT, OUTPUT |
+| `1d`, `1e`–`20`, `21`–`23` | MUTE bits (bit `ch % 4` of byte `base + ch / 4`): MONITOR OUT, INPUT, OUTPUT |
+| `24`–`4b` | INPUT pan, 4 nibbles × 10 |
+| `4c`–`73` | OUTPUT pan, 4 nibbles × 10 (MONITOR OUT has no pan) |
+| `74`–`7f` | MONITOR OUT volume, 6 nibbles × 2 |
+| `80`–`bb` | INPUT volume, 6 nibbles × 10 |
+| `bc`–`f7` | OUTPUT volume, 6 nibbles × 10 |
+| `f8`–`ff` | unused (zero) |
+
+`ua101d` reads this block when a session starts and adopts it; only a
+silent unit (everything muted or at zero, as after power-on with SOFT CTRL)
+gets the daemon's state.
+
 - Panel calls (`RDDP1049.EXE`, IOCTL `0x22225c`, arguments at buffer
   offsets 8/12/16/20/24):
   - sub-command 6 (`00 00 n 08` + 4 bytes): six fixed senders

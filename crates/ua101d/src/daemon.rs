@@ -16,7 +16,13 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use log::{error, info, warn};
-use ua101_usb::{MidiPort, StreamConfig, Ua101, list_devices, protocol::mixer::MixerState};
+use ua101_usb::{
+    MidiPort, StreamConfig, Ua101, list_devices,
+    protocol::{
+        mixer::{self, MixerState},
+        sysex,
+    },
+};
 
 use crate::{
     alsa::{self, Config, Direction, Pcm},
@@ -78,6 +84,21 @@ struct Shared {
     mixer: MixerState,
 }
 
+/// Requests the 256-byte mixer block and waits up to one second for it.
+fn read_mixer_block(midi: &mut MidiPort) -> Option<Vec<u8>> {
+    let request = sysex::rq1(mixer::BLOCK_ADDRESS, mixer::BLOCK_SIZE as u32);
+    midi.send_control(&request).ok()?;
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline {
+        for (a, d) in midi.receive_control(Duration::from_millis(50)).ok()? {
+            if a == mixer::BLOCK_ADDRESS && d.len() >= mixer::BLOCK_SIZE {
+                return Some(d);
+            }
+        }
+    }
+    None
+}
+
 /// SOFT CTRL status address reported by the unit (`00 01 00 05`).
 const SOFT_CTRL: [u8; 4] = [0x00, 0x01, 0x00, 0x05];
 
@@ -92,7 +113,7 @@ fn push_mixer(midi: &mut MidiPort, shared: &mut Shared) -> usize {
     for m in messages {
         if midi.send_control(&m).is_ok() {
             sent += 1;
-            if let Ok(d) = ua101_usb::protocol::sysex::parse_dt1(m.as_bytes()) {
+            if let Ok(d) = sysex::parse_dt1(m.as_bytes()) {
                 shared.clients.broadcast(&format!(
                     "dt1 {} {}",
                     control::hex(&d.address),
@@ -190,7 +211,9 @@ fn idle(shared: &mut Shared, duration: Duration) {
         while let Ok(req) = shared.requests.try_recv() {
             match req {
                 Request::Hello(id) => shared.hello(id),
-                Request::Write(..) => shared.clients.broadcast("err no UA-101 connected"),
+                Request::Write(..) | Request::Read(..) => {
+                    shared.clients.broadcast("err no UA-101 connected")
+                }
             }
         }
         thread::sleep(Duration::from_millis(50));
@@ -240,8 +263,33 @@ fn session(args: &Args, shared: &mut Shared) -> Result<()> {
         .context("cannot open the loopback playback side")?;
     let period = to_pcm.config().period as usize;
 
-    let sent = push_mixer(&mut midi, shared);
-    info!("sent the mixer state ({sent} parameters)");
+    // Like the Windows driver: read the unit's mixer memory and adopt it.
+    // Only a silent unit (fresh power-on with SOFT CTRL) gets our state.
+    match read_mixer_block(&mut midi) {
+        Some(block) => {
+            let device = MixerState::from_block(&block);
+            shared.clients.broadcast(&format!(
+                "dt1 {} {}",
+                control::hex(&mixer::BLOCK_ADDRESS),
+                control::hex(&block)
+            ));
+            shared.state.insert(mixer::BLOCK_ADDRESS, block);
+            match device {
+                Some(d) if !d.is_silent() => {
+                    info!("read the mixer state from the unit");
+                    shared.mixer = d;
+                }
+                _ => {
+                    let sent = push_mixer(&mut midi, shared);
+                    info!("unit mixer was silent: sent the mixer state ({sent} parameters)");
+                }
+            }
+        }
+        None => {
+            let sent = push_mixer(&mut midi, shared);
+            info!("no mixer block from the unit: sent the mixer state ({sent} parameters)");
+        }
+    }
 
     let stop = Arc::new(AtomicBool::new(false));
     let to_thread = {
@@ -307,6 +355,11 @@ fn session(args: &Args, shared: &mut Shared) -> Result<()> {
                     if a == SOFT_CTRL && d.first() == Some(&1) {
                         soft_ctrl_on = true;
                     }
+                    if a == mixer::BLOCK_ADDRESS {
+                        if let Some(m) = MixerState::from_block(&d) {
+                            shared.mixer = m;
+                        }
+                    }
                     shared.state.insert(a, d);
                 }
                 if soft_ctrl_on {
@@ -322,6 +375,12 @@ fn session(args: &Args, shared: &mut Shared) -> Result<()> {
         while let Ok(req) = shared.requests.try_recv() {
             match req {
                 Request::Hello(id) => shared.hello(id),
+                Request::Read(a, size) => {
+                    let m = sysex::rq1(a, size);
+                    if let Err(e) = midi.send_control(&m) {
+                        shared.clients.broadcast(&format!("err read failed: {e}"));
+                    }
+                }
                 Request::Write(a, d) => match midi.write_parameters(a, &d) {
                     Ok(()) => {
                         shared.clients.broadcast(&format!(
