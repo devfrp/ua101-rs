@@ -23,6 +23,7 @@ pub mod midi;
 pub mod monitor;
 pub mod packets;
 pub mod pcm;
+pub mod sysex;
 
 /// Roland Corporation USB vendor ID.
 pub const VENDOR_ID: u16 = 0x0582;

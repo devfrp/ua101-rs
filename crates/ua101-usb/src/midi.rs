@@ -8,6 +8,7 @@ use ua101_protocol::{
     INTF_MIDI,
     descriptors::{Direction, find_bulk_endpoint},
     midi::{Encoder, EventPacket, decode_packet},
+    sysex::{self, CONTROL_CABLE},
 };
 
 use crate::Result;
@@ -20,7 +21,10 @@ pub struct MidiPort {
     interface: Option<Interface>,
     out_ep: Option<Endpoint<Bulk, Out>>,
     in_ep: Option<Endpoint<Bulk, In>>,
-    encoder: Encoder,
+    encoders: [Encoder; 2],
+    /// Bytes received on the control cable that have not formed a complete
+    /// SysEx message yet.
+    control_rx: Vec<u8>,
 }
 
 impl MidiPort {
@@ -35,15 +39,24 @@ impl MidiPort {
             interface: Some(interface),
             out_ep: Some(out_ep),
             in_ep: Some(in_ep),
-            encoder: Encoder::new(0),
+            encoders: [Encoder::new(0), Encoder::new(CONTROL_CABLE)],
+            control_rx: Vec::new(),
         })
     }
 
-    /// Sends raw MIDI bytes (any mix of channel, system and SysEx messages).
+    /// Sends raw MIDI bytes (any mix of channel, system and SysEx messages)
+    /// to the external MIDI OUT port (cable 0).
     pub fn send(&mut self, midi: &[u8], timeout: Duration) -> Result<()> {
+        self.send_on_cable(0, midi, timeout)
+    }
+
+    /// Sends raw MIDI bytes on cable 0 (MIDI OUT jack) or cable 1 (the
+    /// device's internal control port).
+    pub fn send_on_cable(&mut self, cable: u8, midi: &[u8], timeout: Duration) -> Result<()> {
+        let encoder = &mut self.encoders[(cable as usize).min(1)];
         let mut packets = Vec::with_capacity(midi.len() * 2);
         for &b in midi {
-            if let Some(p) = self.encoder.push(b) {
+            if let Some(p) = encoder.push(b) {
                 packets.extend_from_slice(&p);
             }
         }
@@ -84,15 +97,70 @@ impl MidiPort {
             .collect())
     }
 
-    /// Waits up to `timeout` for incoming MIDI bytes.
+    /// Waits up to `timeout` for MIDI bytes from the external MIDI IN port
+    /// (cable 0). Control-cable traffic received meanwhile is buffered for
+    /// [`read_parameters`](Self::read_parameters).
     pub fn receive(&mut self, timeout: Duration) -> Result<Vec<u8>> {
         let mut out = Vec::new();
         for p in self.receive_packets(timeout)? {
-            if let Some((_, data)) = decode_packet(&p) {
-                out.extend_from_slice(data);
+            if let Some((cable, data)) = decode_packet(&p) {
+                if cable == CONTROL_CABLE {
+                    self.control_rx.extend_from_slice(data);
+                } else {
+                    out.extend_from_slice(data);
+                }
             }
         }
         Ok(out)
+    }
+
+    /// Writes mixer/device parameters with a Roland DT1 message on the
+    /// control cable.
+    pub fn write_parameters(&mut self, address: [u8; 4], data: &[u8]) -> Result<()> {
+        let msg = sysex::dt1(address, data);
+        self.send_on_cable(CONTROL_CABLE, msg.as_bytes(), Duration::from_secs(1))
+    }
+
+    /// Reads `size` bytes of device memory at `address` with a Roland RQ1
+    /// request and returns every DT1 reply as `(address, data)`. Collection
+    /// stops after `timeout` without new data.
+    pub fn read_parameters(
+        &mut self,
+        address: [u8; 4],
+        size: u32,
+        timeout: Duration,
+    ) -> Result<Vec<([u8; 4], Vec<u8>)>> {
+        self.control_rx.clear();
+        let msg = sysex::rq1(address, size);
+        self.send_on_cable(CONTROL_CABLE, msg.as_bytes(), Duration::from_secs(1))?;
+        let mut replies = Vec::new();
+        let mut received = 0usize;
+        loop {
+            let packets = self.receive_packets(timeout)?;
+            if packets.is_empty() {
+                break;
+            }
+            for p in packets {
+                if let Some((CONTROL_CABLE, data)) = decode_packet(&p) {
+                    self.control_rx.extend_from_slice(data);
+                }
+            }
+            while let Some(end) = self.control_rx.iter().position(|&b| b == 0xf7) {
+                let msg: Vec<u8> = self.control_rx.drain(..=end).collect();
+                let start = msg.iter().position(|&b| b == 0xf0).unwrap_or(0);
+                match sysex::parse_dt1(&msg[start..]) {
+                    Ok(d) => {
+                        received += d.data.len();
+                        replies.push((d.address, d.data.to_vec()));
+                    }
+                    Err(e) => log::debug!("ignored control message {:02x?}: {e:?}", &msg[start..]),
+                }
+            }
+            if received >= size as usize {
+                break;
+            }
+        }
+        Ok(replies)
     }
 }
 

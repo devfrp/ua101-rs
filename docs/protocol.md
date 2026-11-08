@@ -123,6 +123,43 @@ pairing and the 48/88.2/96 kHz positions.
   (`0x1d780`): standard **USB-MIDI 1.0 event packets** (cable number + CIN,
   then 3 data bytes).
 
+## Mixer and device memory: Roland SysEx on cable 1 (observed, static)
+
+Roland's control panel (`RDDP1049.EXE`) drives the mixer through driver
+IOCTL `0x22225c`. Its 40-byte buffer holds a sub-command at offset 4 and
+arguments at offsets 8, 12 and 16. The kernel dispatcher (`0x24ca0`, 28
+cases, jump table at `0x25578`) turns each sub-command into a **Roland
+exclusive message** sent on **USB-MIDI cable 1** of the bulk MIDI endpoint.
+The send path is `0x1e290` with cable argument `1`.
+
+```
+DT1 (write): F0 41 10 00 69 12 a0 a1 a2 a3 <data> sum F7   (finaliser 0x209c0)
+RQ1 (read):  F0 41 10 00 69 11 a0 a1 a2 a3 s0 s1 s2 s3 sum F7   (0x20d40)
+sum = (128 - Σ(address + data) mod 128) mod 128
+```
+
+Addresses written by each sub-command (`n` and `m` are IOCTL arguments, `v`
+is the value):
+
+| Sub-cmd | Address                     | Data   | Handler   | Notes |
+|---------|-----------------------------|--------|-----------|-------|
+| 4       | RQ1 `00 02 n 00`, size 4    |        | `0x237f0` | reads one channel block |
+| 9       | `00 00 00 00`               | 1 byte | `0x23bf0` | |
+| 10      | `00 00 00 01`               | 1 byte | `0x23cc0` | |
+| 11      | `00 00 00 02`               | 1 byte | `0x23d90` | |
+| 12      | `00 00 n 03`                | 1 byte | `0x23e40` | |
+| 14–19   | `00 01 00 00` … `00 01 00 05` | 1 byte | `0x24030`… | global parameters |
+| 20      | `00 02 n m`                 | 1 byte | `0x24510` | per-channel parameter; driver keeps 5 per channel |
+| 21      | `00 (n+2) 00 00`            | 1 byte | `0x24660` | `n` is 1-based |
+| 22      | `00 (n+3) (2m) 01`          | 1 byte | `0x247c0` | |
+| 23      | `00 (n+3) m 02`             | 1 byte | `0x248e0` | |
+| 24      | `00 (n+3) m 03`             | 4 bytes| `0x24a00` | 16-bit value split into nibbles (`0x20b80`) |
+| 25      | `00 (n+3) m 07`             | 6 bytes| `0x24b50` | `0x20e70` |
+
+The panel uses sub-commands 6 and 20–26 for its mixer controls. Which UI
+control maps to which address, and the value ranges, are **not yet known**:
+the plan is to read the device's memory with RQ1 and correlate.
+
 ## Direct monitoring (inferred)
 
 The ASIO driver (`RDAS1049.DLL`, `0x1800014af` and `0x180001531`) calls

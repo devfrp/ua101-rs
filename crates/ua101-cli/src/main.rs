@@ -60,6 +60,27 @@ enum Command {
         #[arg(required = true)]
         bytes: Vec<String>,
     },
+    /// Read device/mixer memory with a Roland RQ1 request on the control
+    /// cable, e.g. `param-read "00 02 00 00" 16`.
+    ParamRead {
+        /// 4-byte address in hex.
+        address: String,
+        /// Number of bytes to read.
+        #[arg(default_value_t = 1)]
+        size: u32,
+        /// Milliseconds to wait for replies.
+        #[arg(long, default_value_t = 300)]
+        timeout_ms: u64,
+    },
+    /// Write device/mixer memory with a Roland DT1 message. Experimental:
+    /// the parameter map is still being documented.
+    ParamWrite {
+        /// 4-byte address in hex.
+        address: String,
+        /// Data bytes in hex.
+        #[arg(required = true)]
+        data: Vec<String>,
+    },
     /// Record every input to a 24-bit WAV file (Linux).
     Record {
         output: PathBuf,
@@ -103,6 +124,12 @@ fn main() -> Result<()> {
         Command::Monitor { state, input } => monitor(&open(cli.device)?, state, input),
         Command::MidiIn { seconds } => midi_in(&open(cli.device)?, seconds),
         Command::MidiOut { bytes } => midi_out(&open(cli.device)?, &bytes),
+        Command::ParamRead {
+            address,
+            size,
+            timeout_ms,
+        } => param_read(&open(cli.device)?, &address, size, timeout_ms),
+        Command::ParamWrite { address, data } => param_write(&open(cli.device)?, &address, &data),
         Command::Record { output, seconds } => record(&open(cli.device)?, &output, seconds),
         Command::Play { input, output } => play(&open(cli.device)?, &input, output),
         Command::Tone {
@@ -215,13 +242,58 @@ fn midi_in(dev: &Ua101, seconds: Option<f64>) -> Result<()> {
     Ok(())
 }
 
-fn midi_out(dev: &Ua101, bytes: &[String]) -> Result<()> {
-    let data = bytes
+fn parse_hex(bytes: &[String]) -> Result<Vec<u8>> {
+    bytes
         .iter()
         .flat_map(|s| s.split_whitespace())
         .map(|b| u8::from_str_radix(b.trim_start_matches("0x"), 16))
         .collect::<Result<Vec<u8>, _>>()
-        .context("bytes must be hexadecimal, e.g. `90 3c 64`")?;
+        .context("bytes must be hexadecimal, e.g. `90 3c 64`")
+}
+
+fn parse_address(s: &str) -> Result<[u8; 4]> {
+    let v = parse_hex(&[s.to_string()])?;
+    let a: [u8; 4] = v
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("an address is 4 hex bytes, e.g. \"00 02 00 00\""))?;
+    if a.iter().any(|&b| b > 0x7f) {
+        bail!("address bytes are 7-bit (00-7f)");
+    }
+    Ok(a)
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn param_read(dev: &Ua101, address: &str, size: u32, timeout_ms: u64) -> Result<()> {
+    let address = parse_address(address)?;
+    let mut port = dev.open_midi()?;
+    let replies = port.read_parameters(address, size, Duration::from_millis(timeout_ms))?;
+    if replies.is_empty() {
+        println!("no reply");
+    }
+    for (addr, data) in replies {
+        println!("{}: {}", hex(&addr), hex(&data));
+    }
+    Ok(())
+}
+
+fn param_write(dev: &Ua101, address: &str, data: &[String]) -> Result<()> {
+    let address = parse_address(address)?;
+    let data = parse_hex(data)?;
+    let mut port = dev.open_midi()?;
+    port.write_parameters(address, &data)?;
+    println!("wrote {} at {}", hex(&data), hex(&address));
+    Ok(())
+}
+
+fn midi_out(dev: &Ua101, bytes: &[String]) -> Result<()> {
+    let data = parse_hex(bytes)?;
     let mut port = dev.open_midi()?;
     port.send(&data, Duration::from_secs(1))?;
     println!("sent {} byte(s)", data.len());
