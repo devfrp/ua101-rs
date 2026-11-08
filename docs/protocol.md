@@ -198,6 +198,25 @@ The panel uses sub-commands 6 and 20–26 for its mixer controls. Which UI
 control maps to which address, and the value ranges, are **not yet known**:
 the plan is to read the device's memory with RQ1 and correlate.
 
+### Bulk mixer block and panel calls (observed, static; work in progress)
+
+- Sub-commands 8 and 13 send one 268-byte DT1 at address `02 xx 00 00`
+  with 256 data bytes (`0x210e0` header, `0x21150` finaliser). The data is
+  built by `0x228a0` / `0x21e20` (with `0x22090`, `0x22460`, `0x219f0`),
+  using 5-byte groups. This is the complete mixer memory image; its layout
+  is still being decoded.
+- Panel calls (`RDDP1049.EXE`, IOCTL `0x22225c`, arguments at buffer
+  offsets 8/12/16/20/24):
+  - sub-command 6 (`00 00 n 08` + 4 bytes): six fixed senders
+    (`0x1400055d0`…) with argument patterns `(0,0,3,0,0)`, `(0,0,4,0,0)`,
+    `(0,0,0,3,0)`, `(0,0,0,5,0)`, `(0,0,0,4,0)`, `(0,0,0,0,3)`; another
+    caller (`0x14000990a`) passes computed values. Patch bay (the panel
+    draws virtual cables) is the leading candidate.
+  - sub-command 7 (`00 00 n 04` + 4 bytes): `0x140009bf7`, computed values.
+  - sub-command 9 (`00 00 00 00`): value 0 or 1 (`0x140003d4f`, `0x140003e0f`).
+  - sub-command 11 (`00 00 00 02`): all-zero arguments.
+  - sub-command 12 (`00 00 n 03`): only `n` set (`0x140002c90`).
+
 ## Direct monitoring (inferred)
 
 The ASIO driver (`RDAS1049.DLL`, `0x1800014af` and `0x180001531`) calls
