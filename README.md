@@ -18,9 +18,9 @@ les descripteurs d'une vraie carte. Voir [`docs/protocol.md`](docs/protocol.md).
 | Audio 10 sorties / 12 entrées  | ✅ (usbfs) | 🚧 IOKit isoch | 🚧 WinUSB isoch |
 | Périphérique audio système (PipeWire/JACK, CoreAudio, ASIO/WASAPI) | 🚧 | 🚧 | 🚧 |
 
-✅ implémenté · 🚧 à faire. Le streaming audio Linux est écrit mais doit
-encore être validé sur matériel (voir *Questions ouvertes* dans
-`docs/protocol.md`).
+✅ implémenté · 🚧 à faire. Sous Linux, l'enregistrement 12 canaux a été
+validé sur une vraie carte à 44,1 kHz. La lecture audible reste à
+valider (voir *Questions ouvertes* dans `docs/protocol.md`).
 
 ## Installation
 

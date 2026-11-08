@@ -56,6 +56,9 @@ pub(crate) struct Engine {
     feedback: VecDeque<u32>,
     feedback_enabled: bool,
     feedback_cap: usize,
+    /// Set once the application has queued playback data; silence sent
+    /// before that is not an underrun.
+    playback_primed: bool,
     cap_tx: rtrb::Producer<i32>,
     play_rx: rtrb::Consumer<i32>,
     stop: Arc<AtomicBool>,
@@ -150,6 +153,7 @@ impl Engine {
             feedback: VecDeque::with_capacity(urbs * packets_per_urb * 4),
             feedback_enabled,
             feedback_cap: urbs * packets_per_urb * 4,
+            playback_primed: false,
             cap_tx,
             play_rx,
             stop,
@@ -319,6 +323,9 @@ impl Engine {
                 .min(self.play_max_frames) as usize;
             let samples = frames * channels;
             let available = self.play_rx.slots().min(samples);
+            if available > 0 {
+                self.playback_primed = true;
+            }
             for (k, s) in self.scratch[..samples].iter_mut().enumerate() {
                 *s = if k < available {
                     self.play_rx.pop().unwrap_or(0)
@@ -326,7 +333,7 @@ impl Engine {
                     0
                 };
             }
-            if available < samples && channels > 0 {
+            if self.playback_primed && available < samples && channels > 0 {
                 underruns += ((samples - available) / channels) as u64;
             }
             let bytes = frames * frame_bytes;

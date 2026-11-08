@@ -71,7 +71,8 @@ pub struct StreamStats {
     pub playback_frames: u64,
     /// Captured frames dropped because the capture ring was full.
     pub capture_overruns: u64,
-    /// Frames of silence sent because the playback ring was empty.
+    /// Frames of silence sent because the playback ring ran dry after the
+    /// application started queueing audio.
     pub playback_underruns: u64,
     /// Isochronous packets that completed with an error.
     pub packet_errors: u64,

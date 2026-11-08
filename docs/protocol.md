@@ -101,6 +101,19 @@ Other URBs: `SYNC_RESET_PIPE_AND_CLEAR_STALL` `0x1e` (`0x364d0`),
 - At high speed with `bInterval = 1` there are 8000 packets per second
   (5 or 6 frames per packet at 44.1 kHz, 6 at 48 kHz, 11 or 12 at 88.2/96 kHz).
 
+### Hardware check (observed, device, 2026-11-08)
+
+At 44.1 kHz, with the Rust engine on Linux and the URB size the CLI uses
+(8 URBs × 8 packets per direction), a 2 s capture returned 88 252 frames.
+That matches the nominal rate, with 0 packet errors and 0 overruns. The
+silent playback stream ran alongside it. Inputs 1–8 carry an analog noise
+floor around −102 dBFS RMS with nothing connected, inputs 9–10 are digital
+silence, and channels 11–12 sit near −134 dBFS. After the stream stopped,
+the kernel driver re-attached and ALSA listed the card again.
+
+Not yet verified on hardware: audible playback, the playback/capture
+pairing and the 48/88.2/96 kHz positions.
+
 ## MIDI (observed, static)
 
 - Bulk transfers: URB function `0x09` (`0x19520`), IN with
