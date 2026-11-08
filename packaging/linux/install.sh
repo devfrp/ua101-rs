@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installer for the Rust UA-101 driver tools (ua101, ua101-panel).
+# Installer for the Rust UA-101 driver (ua101d daemon, ua101-panel, ua101).
 #
 #   curl -fsSL https://raw.githubusercontent.com/devfrp/ua101-rs/main/packaging/linux/install.sh | sh
 #
@@ -8,6 +8,7 @@
 #   --prefix DIR          install binaries into DIR/bin (default: /usr/local)
 #   --cli-only            skip the graphical panel and its runtime libraries
 #   --no-deps             do not install runtime libraries with the package manager
+#   --no-daemon           do not install/enable the ua101d driver daemon
 #   --blacklist-kernel    stop the in-kernel snd-ua101 driver from binding the card
 #   --uninstall           remove everything this script installed
 #
@@ -22,9 +23,13 @@ CLI_ONLY=0
 NO_DEPS=0
 BLACKLIST=0
 UNINSTALL=0
+NO_DAEMON=0
 
 RULES_DST="/etc/udev/rules.d/60-ua101.rules"
 MODPROBE_DST="/etc/modprobe.d/ua101-rs-blacklist.conf"
+ALOOP_DST="/etc/modprobe.d/ua101-aloop.conf"
+MODLOAD_DST="/etc/modules-load.d/ua101.conf"
+UNIT_DIR="/etc/systemd/user"
 
 say() { printf '\033[1m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[33mwarning:\033[0m %s\n' "$*" >&2; }
@@ -38,7 +43,8 @@ while [ $# -gt 0 ]; do
         --no-deps) NO_DEPS=1; shift ;;
         --blacklist-kernel) BLACKLIST=1; shift ;;
         --uninstall) UNINSTALL=1; shift ;;
-        -h|--help) sed -n '2,17p' "$0" 2>/dev/null || true; exit 0 ;;
+        --no-daemon) NO_DAEMON=1; shift ;;
+        -h|--help) sed -n '2,18p' "$0" 2>/dev/null || true; exit 0 ;;
         *) die "unknown option: $1" ;;
     esac
 done
@@ -64,7 +70,9 @@ reload_udev() {
 
 if [ "$UNINSTALL" -eq 1 ]; then
     say "removing ua101-rs"
-    $SUDO rm -f "$PREFIX/bin/ua101" "$PREFIX/bin/ua101-panel" "$RULES_DST" "$MODPROBE_DST" \
+    systemctl --user disable --now ua101d.service 2>/dev/null || true
+    $SUDO rm -f "$PREFIX/bin/ua101" "$PREFIX/bin/ua101-panel" "$PREFIX/bin/ua101d" \
+        "$RULES_DST" "$MODPROBE_DST" "$ALOOP_DST" "$MODLOAD_DST" "$UNIT_DIR/ua101d.service" \
         "/usr/share/applications/ua101-panel.desktop"
     reload_udev
     say "done"
@@ -201,6 +209,30 @@ if [ "$CLI_ONLY" -eq 0 ] && [ -f "$SRC/ua101-panel" ]; then
         $SUDO install -d /usr/share/applications
         sed "s|@BINDIR@|$PREFIX/bin|" "$SRC/ua101-panel.desktop" > "$TMP/ua101-panel.desktop"
         $SUDO install -m 644 "$TMP/ua101-panel.desktop" /usr/share/applications/ua101-panel.desktop
+    fi
+fi
+
+if [ "$NO_DAEMON" -eq 0 ] && [ -f "$SRC/ua101d" ]; then
+    say "installing the ua101d driver daemon"
+    $SUDO install -m 755 "$SRC/ua101d" "$PREFIX/bin/ua101d"
+    $SUDO install -d /etc/modprobe.d /etc/modules-load.d "$UNIT_DIR"
+    $SUDO install -m 644 "$SRC/ua101-aloop.conf" "$ALOOP_DST"
+    $SUDO install -m 644 "$SRC/ua101-modules.conf" "$MODLOAD_DST"
+    sed "s|@BINDIR@|$PREFIX/bin|" "$SRC/ua101d.service" > "$TMP/ua101d.service"
+    $SUDO install -m 644 "$TMP/ua101d.service" "$UNIT_DIR/ua101d.service"
+    if ! grep -q '\[UA101RS' /proc/asound/cards 2>/dev/null; then
+        if lsmod 2>/dev/null | grep -q '^snd_aloop'; then
+            warn "snd-aloop is already loaded with other options; reboot to apply $ALOOP_DST"
+        else
+            $SUDO modprobe snd-aloop || warn "could not load snd-aloop"
+        fi
+    fi
+    if [ "$(id -u)" -ne 0 ] && command -v systemctl >/dev/null 2>&1; then
+        systemctl --user daemon-reload || true
+        systemctl --user enable --now ua101d.service \
+            || warn "could not start ua101d; run: systemctl --user enable --now ua101d"
+    else
+        warn "enable the daemon as your user: systemctl --user enable --now ua101d"
     fi
 fi
 

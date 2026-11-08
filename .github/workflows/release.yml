@@ -31,12 +31,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev libx11-dev
-      - run: cargo build --release --locked -p ua101-cli -p ua101-panel
+      - run: cargo build --release --locked -p ua101-cli -p ua101-panel -p ua101d
       - name: Package
         run: |
           mkdir -p dist/ua101-linux
-          cp target/release/ua101 target/release/ua101-panel dist/ua101-linux/
+          cp target/release/ua101 target/release/ua101-panel target/release/ua101d dist/ua101-linux/
           cp packaging/linux/60-ua101.rules packaging/linux/ua101-panel.desktop \
+             packaging/linux/ua101d.service packaging/linux/ua101-aloop.conf \
+             packaging/linux/ua101-modules.conf \
              packaging/linux/install.sh README.md LICENSE-MIT LICENSE-APACHE dist/ua101-linux/
           tar -czf ua101-linux-${{ matrix.arch }}.tar.gz -C dist ua101-linux
       - uses: actions/upload-artifact@v4
@@ -53,12 +55,15 @@ jobs:
         with:
           targets: x86_64-unknown-linux-musl
       - run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - run: cargo build --release --locked -p ua101-cli --target x86_64-unknown-linux-musl
+      - run: cargo build --release --locked -p ua101-cli -p ua101d --target x86_64-unknown-linux-musl
       - name: Package
         run: |
           mkdir -p dist/ua101-linux
-          cp target/x86_64-unknown-linux-musl/release/ua101 dist/ua101-linux/
-          cp packaging/linux/60-ua101.rules packaging/linux/install.sh README.md \
+          cp target/x86_64-unknown-linux-musl/release/ua101 \
+             target/x86_64-unknown-linux-musl/release/ua101d dist/ua101-linux/
+          cp packaging/linux/60-ua101.rules packaging/linux/install.sh \
+             packaging/linux/ua101d.service packaging/linux/ua101-aloop.conf \
+             packaging/linux/ua101-modules.conf README.md \
              LICENSE-MIT LICENSE-APACHE dist/ua101-linux/
           tar -czf ua101-linux-x86_64-musl.tar.gz -C dist ua101-linux
       - uses: actions/upload-artifact@v4

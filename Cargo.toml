@@ -5,6 +5,7 @@ members = [
     "crates/ua101-usb",
     "crates/ua101-cli",
     "crates/ua101-panel",
+    "crates/ua101d",
 ]
 
 [workspace.package]

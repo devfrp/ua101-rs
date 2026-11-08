@@ -92,8 +92,9 @@ impl Counters {
 
 /// A running full-duplex stream. Dropping it stops the stream.
 pub struct DuplexStream {
-    capture: rtrb::Consumer<i32>,
-    playback: rtrb::Producer<i32>,
+    // `Option` only so `split` can move them out; always `Some` otherwise.
+    capture: Option<rtrb::Consumer<i32>>,
+    playback: Option<rtrb::Producer<i32>>,
     stop: Arc<AtomicBool>,
     counters: Arc<Counters>,
     thread: Option<JoinHandle<Result<()>>>,
@@ -104,12 +105,12 @@ pub struct DuplexStream {
 impl DuplexStream {
     /// Interleaved captured samples (`capture_format().channels` per frame).
     pub fn capture(&mut self) -> &mut rtrb::Consumer<i32> {
-        &mut self.capture
+        self.capture.as_mut().expect("rings present until split")
     }
 
     /// Interleaved samples to play (`playback_format().channels` per frame).
     pub fn playback(&mut self) -> &mut rtrb::Producer<i32> {
-        &mut self.playback
+        self.playback.as_mut().expect("rings present until split")
     }
 
     pub fn playback_format(&self) -> &StreamFormat {
@@ -135,6 +136,21 @@ impl DuplexStream {
         self.thread.as_ref().is_some_and(|t| !t.is_finished())
     }
 
+    /// Splits the stream into a control handle and its two ring ends, so
+    /// capture and playback can be serviced from different threads.
+    pub fn split(mut self) -> (StreamControl, rtrb::Consumer<i32>, rtrb::Producer<i32>) {
+        let capture = self.capture.take().expect("rings present until split");
+        let playback = self.playback.take().expect("rings present until split");
+        let control = StreamControl {
+            stop: self.stop.clone(),
+            counters: self.counters.clone(),
+            thread: self.thread.take(),
+            playback_format: self.playback_format,
+            capture_format: self.capture_format,
+        };
+        (control, capture, playback)
+    }
+
     /// Stops the stream and returns the final counters, or the error that
     /// ended it.
     pub fn stop(mut self) -> Result<StreamStats> {
@@ -152,6 +168,55 @@ impl DuplexStream {
 }
 
 impl Drop for DuplexStream {
+    fn drop(&mut self) {
+        let _ = self.shutdown();
+    }
+}
+
+/// Control half of a [`DuplexStream`] returned by [`DuplexStream::split`].
+/// Dropping it stops the stream.
+pub struct StreamControl {
+    stop: Arc<AtomicBool>,
+    counters: Arc<Counters>,
+    thread: Option<JoinHandle<Result<()>>>,
+    playback_format: StreamFormat,
+    capture_format: StreamFormat,
+}
+
+impl StreamControl {
+    pub fn playback_format(&self) -> &StreamFormat {
+        &self.playback_format
+    }
+
+    pub fn capture_format(&self) -> &StreamFormat {
+        &self.capture_format
+    }
+
+    pub fn stats(&self) -> StreamStats {
+        self.counters.snapshot()
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.thread.as_ref().is_some_and(|t| !t.is_finished())
+    }
+
+    /// Stops the stream and returns the final counters, or the error that
+    /// ended it.
+    pub fn stop(mut self) -> Result<StreamStats> {
+        self.shutdown()?;
+        Ok(self.counters.snapshot())
+    }
+
+    fn shutdown(&mut self) -> Result<()> {
+        self.stop.store(true, Ordering::Release);
+        match self.thread.take() {
+            Some(t) => t.join().map_err(|_| Error::ThreadPanicked)?,
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for StreamControl {
     fn drop(&mut self) {
         let _ = self.shutdown();
     }
@@ -187,8 +252,8 @@ pub(crate) fn start(
             .name("ua101-stream".into())
             .spawn(move || engine.run())?;
         Ok(DuplexStream {
-            capture: cap_rx,
-            playback: play_tx,
+            capture: Some(cap_rx),
+            playback: Some(play_tx),
             stop,
             counters,
             thread: Some(thread),

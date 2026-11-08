@@ -4,6 +4,8 @@
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+#[cfg(unix)]
+mod daemon;
 mod link;
 mod meters;
 mod theme;
@@ -162,6 +164,14 @@ struct Panel {
     /// OUTPUT TO MAIN switch and the strip states it saved when turned off.
     outputs_to_main: bool,
     saved_output_on: Vec<bool>,
+    /// Connection to `ua101d`, when it runs. The panel then never takes
+    /// the device itself.
+    #[cfg(unix)]
+    daemon: Option<daemon::DaemonLink>,
+    daemon_connected: bool,
+    daemon_rate: Option<u32>,
+    levels_in: Vec<f32>,
+    levels_out: Vec<f32>,
 }
 
 impl Panel {
@@ -188,6 +198,12 @@ impl Panel {
             tone_output: 0,
             outputs_to_main: true,
             saved_output_on: Vec::new(),
+            #[cfg(unix)]
+            daemon: None,
+            daemon_connected: false,
+            daemon_rate: None,
+            levels_in: Vec::new(),
+            levels_out: Vec::new(),
         };
         p.detect();
         p
@@ -200,9 +216,34 @@ impl Panel {
         self.log.push_back(line);
     }
 
+    fn using_daemon(&self) -> bool {
+        #[cfg(unix)]
+        {
+            self.daemon.is_some()
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
+    }
+
+    fn has_device(&self) -> bool {
+        self.device.is_some() || (self.using_daemon() && self.daemon_connected)
+    }
+
     fn detect(&mut self) {
         self.disconnect();
         self.device = None;
+        #[cfg(unix)]
+        {
+            if self.daemon.is_none() {
+                self.daemon = daemon::DaemonLink::connect(self.ctx.clone());
+            }
+            if self.daemon.is_some() {
+                self.status = "Connected to ua101d: the card stays available to the system.".into();
+                return;
+            }
+        }
         match list_devices() {
             Ok(d) => self.devices = d,
             Err(e) => {
@@ -247,13 +288,103 @@ impl Panel {
     }
 
     fn send(&mut self, msg: sysex::Message) {
+        #[cfg(unix)]
+        if let Some(d) = &mut self.daemon {
+            if let Ok(dt) = sysex::parse_dt1(msg.as_bytes()) {
+                self.log
+                    .push_back(format!("TX {} = {}", hex(&dt.address), hex(dt.data)));
+                if !d.write(dt.address, dt.data) {
+                    self.status = "Lost the connection to ua101d".into();
+                    self.daemon = None;
+                }
+            }
+            return;
+        }
         match &self.link {
             Some(l) => l.send(msg),
             None => self.status = "Not connected: press CONNECT first.".into(),
         }
     }
 
+    /// Updates the local mixer mirror from a parameter value.
+    fn apply_state(&mut self, a: [u8; 4], d: &[u8]) {
+        if a[0] != 0 || !(0x03..=0x05).contains(&a[1]) || d.is_empty() {
+            return;
+        }
+        let bus = (a[1] - 0x03) as usize;
+        let ch = a[2] as usize;
+        match a[3] {
+            mixer::slot::ON => {
+                if let Some(s) = self.mixer.strips[bus].get_mut(ch) {
+                    s.on = d[0] != 0;
+                }
+            }
+            mixer::slot::LINK => {
+                if let Some(l) = self.mixer.links[bus].get_mut(ch / 2) {
+                    *l = d[0] != 0;
+                }
+            }
+            mixer::slot::VOLUME if d.len() >= 4 => {
+                let raw = mixer::from_nibbles(&d[..4]) as f32;
+                if let Some(s) = self.mixer.strips[bus].get_mut(ch) {
+                    s.volume_db = if raw <= 0.0 {
+                        FADER_MIN_DB
+                    } else {
+                        (20.0 * (raw / VOLUME_UNITY).log10()).clamp(FADER_MIN_DB, FADER_MAX_DB)
+                    };
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[cfg(unix)]
+    fn poll_daemon(&mut self) {
+        let mut events = Vec::new();
+        if let Some(d) = &self.daemon {
+            while let Ok(e) = d.events.try_recv() {
+                events.push(e);
+            }
+        }
+        for e in events {
+            match e {
+                daemon::DaemonEvent::Info { rate, connected } => {
+                    self.daemon_connected = connected;
+                    self.daemon_rate = rate;
+                    self.status = if connected {
+                        "ua101d: UA-101 running; the card is available to the system.".into()
+                    } else {
+                        "ua101d is running but no UA-101 is connected.".into()
+                    };
+                }
+                daemon::DaemonEvent::Data(a, d) => {
+                    self.log(format!("RX {} = {}", hex(&a), hex(&d)));
+                    self.front.apply(a, &d);
+                    self.apply_state(a, &d);
+                }
+                daemon::DaemonEvent::Levels { inputs, outputs } => {
+                    let decay = |cur: &mut Vec<f32>, new: Vec<f32>| {
+                        cur.resize(new.len(), 0.0);
+                        for (c, n) in cur.iter_mut().zip(new) {
+                            *c = n.max(*c * 0.8);
+                        }
+                    };
+                    decay(&mut self.levels_in, inputs);
+                    decay(&mut self.levels_out, outputs);
+                }
+                daemon::DaemonEvent::Error(e) => self.status = format!("ua101d: {e}"),
+                daemon::DaemonEvent::Closed => {
+                    self.daemon = None;
+                    self.daemon_connected = false;
+                    self.status = "ua101d stopped. Rescan to use the device directly.".into();
+                }
+            }
+        }
+    }
+
     fn poll_link(&mut self) {
+        #[cfg(unix)]
+        self.poll_daemon();
         let mut events = Vec::new();
         if let Some(l) = &self.link {
             while let Ok(e) = l.events.try_recv() {
@@ -265,6 +396,7 @@ impl Panel {
                 Event::Data(a, d) => {
                     self.log(format!("RX {} = {}", hex(&a), hex(&d)));
                     self.front.apply(a, &d);
+                    self.apply_state(a, &d);
                 }
                 Event::Sent(m) => self.log(format!("TX {m:?}")),
                 Event::Error(err) => {
@@ -449,7 +581,14 @@ impl Panel {
             ui.add_space(12.0);
             self.menu_bar(ui);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if self.link.is_some() {
+                if self.using_daemon() {
+                    let (text, color) = if self.daemon_connected {
+                        ("UA101D", theme::GREEN)
+                    } else {
+                        ("UA101D · NO DEVICE", theme::YELLOW)
+                    };
+                    theme::status_pill(ui, text, color);
+                } else if self.link.is_some() {
                     if ui.button("Disconnect").clicked() {
                         self.disconnect();
                         self.status = "Disconnected; the card is back with the OS driver.".into();
@@ -519,7 +658,9 @@ impl Panel {
         let mut sends = Vec::new();
         let mut toggle_main = None;
         let meters = self.meters.as_ref();
-        let metering = meters.is_some();
+        let daemon_meters = self.using_daemon() && self.daemon_connected;
+        let metering = meters.is_some() || daemon_meters;
+        let (levels_in, levels_out) = (&self.levels_in, &self.levels_out);
         // Room for the strip header, buttons and the LINK row.
         let fader_height = (ui.available_height() - 250.0).clamp(80.0, 440.0);
         egui::ScrollArea::horizontal().show(ui, |ui| {
@@ -580,6 +721,12 @@ impl Panel {
                                 ui.spacing_mut().item_spacing.x = 4.0;
                                 for ch in 0..strips.len() {
                                     let level = match (bus, meters) {
+                                        (Bus::Input, _) if daemon_meters => {
+                                            levels_in.get(ch).copied().unwrap_or(0.0)
+                                        }
+                                        (Bus::Output, _) if daemon_meters => {
+                                            levels_out.get(ch).copied().unwrap_or(0.0)
+                                        }
                                         (Bus::Input, Some(m)) => m.level(ch),
                                         _ => 0.0,
                                     };
@@ -589,7 +736,9 @@ impl Panel {
                                         bus,
                                         ch,
                                         level,
-                                        metering: metering && bus == Bus::Input,
+                                        metering: metering
+                                            && (bus == Bus::Input
+                                                || (bus == Bus::Output && daemon_meters)),
                                         fader_height,
                                         accent: color,
                                         on_enabled: !outputs_off,
@@ -675,9 +824,10 @@ impl Panel {
             });
             ui.add_space(8.0);
             let rate = self
-                .device
-                .as_ref()
-                .map(|d| format!("{:.1} kHz", d.sample_rate() as f64 / 1000.0))
+                .daemon_rate
+                .filter(|_| self.using_daemon())
+                .or_else(|| self.device.as_ref().map(|d| d.sample_rate()))
+                .map(|r| format!("{:.1} kHz", r as f64 / 1000.0))
                 .unwrap_or_else(|| "--.- kHz".into());
             theme::lcd(ui, "SAMPLE RATE", &rate);
             let clock = if self.front.clock.is_some() {
@@ -1062,7 +1212,7 @@ impl eframe::App for Panel {
                     .inner_margin(egui::Margin::same(10)),
             )
             .show(ui, |ui| {
-                if self.device.is_none() {
+                if !self.has_device() {
                     ui.centered_and_justified(|ui| {
                         if ui.button("No UA-101 found — Rescan").clicked() {
                             self.detect();

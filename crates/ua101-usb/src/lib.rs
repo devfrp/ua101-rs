@@ -25,7 +25,20 @@ mod usbfs;
 pub use device::{Ua101, list_devices, reattach_kernel_driver};
 pub use error::{Error, Result};
 pub use midi::MidiPort;
-pub use stream::{DuplexStream, StreamConfig, StreamStats};
+pub use stream::{DuplexStream, StreamConfig, StreamControl, StreamStats};
 
 pub use nusb::{DeviceInfo, Speed};
+
+/// Path of the `ua101d` control socket shared by the daemon and its clients:
+/// `$XDG_RUNTIME_DIR/ua101d.sock`, or `/tmp/ua101d-$USER.sock`.
+#[cfg(unix)]
+pub fn daemon_socket_path() -> std::path::PathBuf {
+    match std::env::var_os("XDG_RUNTIME_DIR") {
+        Some(dir) => std::path::PathBuf::from(dir).join("ua101d.sock"),
+        None => {
+            let user = std::env::var("USER").unwrap_or_else(|_| "user".into());
+            std::path::PathBuf::from(format!("/tmp/ua101d-{user}.sock"))
+        }
+    }
+}
 pub use ua101_protocol as protocol;

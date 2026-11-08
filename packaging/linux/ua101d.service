@@ -1,0 +1,12 @@
+[Unit]
+Description=Roland UA-101 user-space driver (ua101d)
+Documentation=https://github.com/devfrp/ua101-rs
+After=pipewire.service
+
+[Service]
+ExecStart=@BINDIR@/ua101d
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,26 @@
+[package]
+name = "ua101d"
+description = "User-space driver daemon for the Roland/EDIROL UA-101 (audio bridge, MIDI, mixer control)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories = ["hardware-support", "multimedia::audio"]
+
+[[bin]]
+name = "ua101d"
+path = "src/main.rs"
+
+[dependencies]
+ua101-usb.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+log.workspace = true
+env_logger.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc.workspace = true
+rtrb.workspace = true

@@ -15,7 +15,8 @@ checked against the descriptors of a real unit. See [`docs/protocol.md`](docs/pr
 | Direct monitoring (experimental) | ✅    | ✅    | ✅      |
 | MIDI in/out                      | ✅    | ✅    | ✅      |
 | Audio, 10 outputs / 12 inputs    | ✅ (usbfs) | 🚧 IOKit isoch | 🚧 WinUSB isoch |
-| System audio device (PipeWire/JACK, CoreAudio, ASIO/WASAPI) | 🚧 | 🚧 | 🚧 |
+| System audio device (`ua101d` driver daemon) | ✅ (snd-aloop) | 🚧 | 🚧 |
+| Mixer / device panel (Roland SysEx)           | ✅ (addresses partly inferred) | ✅ | ✅ |
 
 ✅ implemented · 🚧 to do. On Linux, 12-channel recording has been verified
 on a real unit at 44.1 kHz. Audible playback is still to be verified (see
@@ -60,6 +61,29 @@ Download `ua101-macos-universal.dmg` (Intel + Apple Silicon) and drag
 time, right-click it and choose *Open*, or run
 `xattr -dr com.apple.quarantine "/Applications/UA-101 Panel.app"`.
 
+## The driver daemon (Linux)
+
+`ua101d` plays the role of Roland's Windows driver. It owns the unit, runs
+the audio streams, keeps the mixer state (and restores it when the unit is
+plugged in), and gives the panel a control channel. Applications reach the
+card through the `snd-aloop` loopback card `UA101RS`:
+
+- **device 0** of `UA101RS` is the UA-101 for applications and
+  PipeWire/JACK: 10 outputs, 12 inputs;
+- device 1 is reserved for the daemon.
+
+The installer sets everything up. By hand:
+
+```sh
+sudo modprobe snd-aloop id=UA101RS pcm_substreams=1
+ua101d                        # or: systemctl --user enable --now ua101d
+```
+
+While `ua101d` runs, `ua101-panel` connects to it automatically (status
+`UA101D` in the header) and the card stays available to the system. The
+control socket is `$XDG_RUNTIME_DIR/ua101d.sock`; its line protocol is
+documented in `crates/ua101d/src/control.rs`.
+
 ## Usage
 
 ```sh
@@ -99,6 +123,8 @@ crates/
                    (Linux: usbfs), full-duplex engine with ring buffers
   ua101-cli        `ua101` binary
   ua101-panel      `ua101-panel` binary (egui)
+  ua101d           driver daemon: audio bridge to snd-aloop (pure-Rust ALSA
+                   ioctls), MIDI/mixer control, state mirror, control socket
 packaging/         Linux installer, udev rule, macOS bundle, Windows notes
 docs/protocol.md   USB protocol and evidence
 ```

@@ -2536,6 +2536,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ua101d"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "env_logger",
+ "libc",
+ "log",
+ "rtrb",
+ "ua101-usb",
+]
+
+[[package]]
 name = "unicode-general-category"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
