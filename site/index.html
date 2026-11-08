@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ua101-rs: a Rust driver for the UA-101</title>
+<meta name="description" content="Open-source Rust driver and control panel for the Roland/EDIROL UA-101 USB audio interface: 10 outputs, 12 inputs and the full mixer on Linux.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@500;600&family=IBM+Plex+Sans:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script>document.documentElement.classList.add('js');</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="slab">
+  <div class="container slab__row">
+    <a class="wordmark" href="./">ua101-rs</a>
+    <nav aria-label="Main">
+      <ul class="slab__links">
+        <li><a href="#panel">Panel</a></li>
+        <li><a href="#protocol">Protocol</a></li>
+        <li><a href="#platforms">Platforms</a></li>
+        <li><a href="https://github.com/devfrp/ua101-rs">Source</a></li>
+      </ul>
+    </nav>
+    <a class="key key--small" href="#install">Install</a>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero" aria-labelledby="hero-head">
+  <div class="container hero__grid">
+    <div class="hero__text">
+      <h1 id="hero-head">Your UA-101, back on Linux</h1>
+      <p class="lead">A Rust driver with the full mixer: ten outputs, twelve inputs.</p>
+    </div>
+    <div class="hero__action">
+      <div class="cmd cut" data-copy-root>
+        <code class="cmd__text" id="cmd-hero">curl -fsSL https://raw.githubusercontent.com/devfrp/ua101-rs/main/packaging/linux/install.sh | sh</code>
+        <button class="key key--primary" type="button" data-copy="cmd-hero">Copy</button>
+      </div>
+      <p class="hero__status" role="status" aria-live="polite" data-copy-status></p>
+      <div class="hero__keys">
+        <a class="key" href="https://github.com/devfrp/ua101-rs/releases/latest/download/ua101-panel-windows-x86_64.exe">Windows panel</a>
+        <a class="key" href="https://github.com/devfrp/ua101-rs/releases/latest/download/ua101-macos-universal.dmg">macOS panel</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="stack" id="panel" aria-labelledby="panel-head">
+  <div class="container stack__grid">
+    <div class="stack__pane">
+      <h2 id="panel-head">The control panel, rebuilt</h2>
+      <p class="lead">Decoded from Roland’s original Windows driver.</p>
+      <a class="key" href="https://github.com/devfrp/ua101-rs/tree/main/crates/ua101-panel">Panel source</a>
+    </div>
+
+    <div class="stack__scroll">
+      <figure class="shot">
+        <div class="screen" data-slot="patchbay" data-kind="product" data-alt="The ua101-panel patch bay with cables from inputs to outputs">
+          <div class="screen__bar" data-keep>
+            <span>Patch bay</span>
+            <button class="pill-key" type="button" aria-pressed="true" data-patch-toggle>On</button>
+          </div>
+          <svg class="patch" viewBox="60 0 520 380" role="group" aria-label="Patch bay: inputs on the left, outputs on the right" data-patch data-keep>
+            <g class="patch__cables" data-cables>
+              <path class="cable" d="M150 22 C 303 53.5, 337 143.5, 490 112"/>
+              <path class="cable" d="M150 52 C 303 83.5, 337 173.5, 490 142"/>
+            </g>
+            <g data-inputs>
+              <g class="jack is-used"><circle cx="150" cy="22" r="8"/><circle class="core" cx="150" cy="22" r="4"/></g><text x="132" y="26" text-anchor="end">IN 1</text>
+              <g class="jack is-used"><circle cx="150" cy="52" r="8"/><circle class="core" cx="150" cy="52" r="4"/></g><text x="132" y="56" text-anchor="end">IN 2</text>
+              <g class="jack"><circle cx="150" cy="82" r="8"/><circle class="core" cx="150" cy="82" r="4"/></g><text x="132" y="86" text-anchor="end">IN 3</text>
+              <g class="jack"><circle cx="150" cy="112" r="8"/><circle class="core" cx="150" cy="112" r="4"/></g><text x="132" y="116" text-anchor="end">IN 4</text>
+              <g class="jack"><circle cx="150" cy="142" r="8"/><circle class="core" cx="150" cy="142" r="4"/></g><text x="132" y="146" text-anchor="end">IN 5</text>
+              <g class="jack"><circle cx="150" cy="172" r="8"/><circle class="core" cx="150" cy="172" r="4"/></g><text x="132" y="176" text-anchor="end">IN 6</text>
+              <g class="jack"><circle cx="150" cy="202" r="8"/><circle class="core" cx="150" cy="202" r="4"/></g><text x="132" y="206" text-anchor="end">IN 7</text>
+              <g class="jack"><circle cx="150" cy="232" r="8"/><circle class="core" cx="150" cy="232" r="4"/></g><text x="132" y="236" text-anchor="end">IN 8</text>
+              <g class="jack"><circle cx="150" cy="262" r="8"/><circle class="core" cx="150" cy="262" r="4"/></g><text x="132" y="266" text-anchor="end">IN 9</text>
+              <g class="jack"><circle cx="150" cy="292" r="8"/><circle class="core" cx="150" cy="292" r="4"/></g><text x="132" y="296" text-anchor="end">IN 10</text>
+              <g class="jack"><circle cx="150" cy="322" r="8"/><circle class="core" cx="150" cy="322" r="4"/></g><text x="132" y="326" text-anchor="end">IN 11</text>
+              <g class="jack"><circle cx="150" cy="352" r="8"/><circle class="core" cx="150" cy="352" r="4"/></g><text x="132" y="356" text-anchor="end">IN 12</text>
+            </g>
+            <g data-outputs>
+              <g class="jack"><circle cx="490" cy="52" r="8"/><circle class="core" cx="490" cy="52" r="4"/></g><text x="508" y="56" text-anchor="start">OUT 1</text>
+              <g class="jack"><circle cx="490" cy="82" r="8"/><circle class="core" cx="490" cy="82" r="4"/></g><text x="508" y="86" text-anchor="start">OUT 2</text>
+              <g class="jack is-used"><circle cx="490" cy="112" r="8"/><circle class="core" cx="490" cy="112" r="4"/></g><text x="508" y="116" text-anchor="start">OUT 3</text>
+              <g class="jack is-used"><circle cx="490" cy="142" r="8"/><circle class="core" cx="490" cy="142" r="4"/></g><text x="508" y="146" text-anchor="start">OUT 4</text>
+              <g class="jack"><circle cx="490" cy="172" r="8"/><circle class="core" cx="490" cy="172" r="4"/></g><text x="508" y="176" text-anchor="start">OUT 5</text>
+              <g class="jack"><circle cx="490" cy="202" r="8"/><circle class="core" cx="490" cy="202" r="4"/></g><text x="508" y="206" text-anchor="start">OUT 6</text>
+              <g class="jack"><circle cx="490" cy="232" r="8"/><circle class="core" cx="490" cy="232" r="4"/></g><text x="508" y="236" text-anchor="start">OUT 7</text>
+              <g class="jack"><circle cx="490" cy="262" r="8"/><circle class="core" cx="490" cy="262" r="4"/></g><text x="508" y="266" text-anchor="start">OUT 8</text>
+              <g class="jack"><circle cx="490" cy="292" r="8"/><circle class="core" cx="490" cy="292" r="4"/></g><text x="508" y="296" text-anchor="start">OUT 9</text>
+              <g class="jack"><circle cx="490" cy="322" r="8"/><circle class="core" cx="490" cy="322" r="4"/></g><text x="508" y="326" text-anchor="start">OUT 10</text>
+            </g>
+          </svg>
+        </div>
+        <figcaption>Drag an input to an output: one cable, one channel.</figcaption>
+      </figure>
+
+      <figure class="shot">
+        <div class="screen" data-slot="faders" data-kind="product" data-alt="Input strips with faders in decibels">
+          <div class="screen__bar" data-keep><span>Input</span></div>
+          <div class="strips" data-keep>
+            <div class="strip"><span class="strip__name">1</span><output class="strip__db" for="f1">0.0 dB</output><input class="fader" id="f1" type="range" min="-60" max="6" step="0.5" value="0" aria-label="Input 1 level"></div>
+            <div class="strip"><span class="strip__name">2</span><output class="strip__db" for="f2">0.0 dB</output><input class="fader" id="f2" type="range" min="-60" max="6" step="0.5" value="0" aria-label="Input 2 level"></div>
+            <div class="strip"><span class="strip__name">3</span><output class="strip__db" for="f3">-6.0 dB</output><input class="fader" id="f3" type="range" min="-60" max="6" step="0.5" value="-6" aria-label="Input 3 level"></div>
+            <div class="strip"><span class="strip__name">4</span><output class="strip__db" for="f4">-6.0 dB</output><input class="fader" id="f4" type="range" min="-60" max="6" step="0.5" value="-6" aria-label="Input 4 level"></div>
+            <div class="strip"><span class="strip__name">5</span><output class="strip__db" for="f5">+3.0 dB</output><input class="fader" id="f5" type="range" min="-60" max="6" step="0.5" value="3" aria-label="Input 5 level"></div>
+            <div class="strip"><span class="strip__name">6</span><output class="strip__db" for="f6">Off</output><input class="fader" id="f6" type="range" min="-60" max="6" step="0.5" value="-60" aria-label="Input 6 level"></div>
+          </div>
+        </div>
+        <figcaption>Faders in dB, from off to +6 dB.</figcaption>
+      </figure>
+
+      <figure class="shot">
+        <div class="screen" data-slot="link" data-kind="product" data-alt="Output strips with LINK and MAIN switches">
+          <div class="screen__bar" data-keep><span>Output</span></div>
+          <div class="outs" data-keep>
+            <div class="pair"><button class="pill-key" type="button" aria-pressed="true">Link 1-2</button><button class="pill-key pill-key--main" type="button" aria-pressed="true">Main 1</button><button class="pill-key pill-key--main" type="button" aria-pressed="true">Main 2</button></div>
+            <div class="pair"><button class="pill-key" type="button" aria-pressed="true">Link 3-4</button><button class="pill-key pill-key--main" type="button" aria-pressed="false">Main 3</button><button class="pill-key pill-key--main" type="button" aria-pressed="false">Main 4</button></div>
+            <div class="pair"><button class="pill-key" type="button" aria-pressed="false">Link 5-6</button><button class="pill-key pill-key--main" type="button" aria-pressed="true">Main 5</button><button class="pill-key pill-key--main" type="button" aria-pressed="false">Main 6</button></div>
+          </div>
+        </div>
+        <figcaption>Linked pairs, and MONITOR OUT per output.</figcaption>
+      </figure>
+
+      <figure class="shot">
+        <div class="screen" data-slot="device" data-kind="product" data-alt="The device panel with sample rate and status lamps">
+          <div class="screen__bar" data-keep><span>Device</span></div>
+          <div class="device" data-keep>
+            <div class="lcd"><small>Rate</small><b>44.1 kHz</b></div>
+            <div class="lcd"><small>Channels</small><b>10 out, 12 in</b></div>
+            <ul class="lamps">
+              <li><span class="lamp is-on" aria-hidden="true"></span>SOFT CTRL</li>
+              <li><span class="lamp" aria-hidden="true"></span>MONO</li>
+            </ul>
+          </div>
+        </div>
+        <figcaption>The unit’s front panel, live.</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section class="protocol" id="protocol" aria-labelledby="protocol-head">
+  <div class="container">
+    <div class="head-split">
+      <h2 id="protocol-head">Every fader is a SysEx message</h2>
+      <p class="lead">Roland DT1 and RQ1 on USB-MIDI cable 1, model <code>00 69</code>.</p>
+    </div>
+    <div class="map">
+      <ol class="map__bytes graphite cut" aria-label="Bytes sent to the unit">
+        <li><code>F0 41 10 00 69 12 <b>00 05 00 07</b> 01 00 00 00 00 00 73 F7</code></li>
+        <li><code>F0 41 10 00 69 12 <b>00 05 00 03</b> 04 00 00 00 74 F7</code></li>
+        <li><code>F0 41 10 00 69 12 <b>00 05 00 02</b> 01 78 F7</code></li>
+        <li><code>F0 41 10 00 69 12 <b>00 04 00 01</b> 01 7A F7</code></li>
+        <li><code>F0 41 10 00 69 11 <b>02 00 00 00</b> 00 00 02 00 7C F7</code></li>
+      </ol>
+      <svg class="map__joins" viewBox="0 0 64 300" preserveAspectRatio="none" aria-hidden="true">
+        <path d="M0 30 H32 V30 H64"/><path d="M0 90 H32 V90 H64"/><path d="M0 150 H32 V150 H64"/><path d="M0 210 H32 V210 H64"/><path d="M0 270 H32 V270 H64"/>
+      </svg>
+      <ol class="map__meaning graphite cut" aria-label="What each message does">
+        <li>Output 1 volume, 0 dB</li>
+        <li>Output 1 pan, centre</li>
+        <li>Output 1 mute</li>
+        <li>Link inputs 1 and 2</li>
+        <li>Read the whole mixer, 256 bytes</li>
+      </ol>
+    </div>
+    <p class="map__note">How each address was found: <a href="https://github.com/devfrp/ua101-rs/blob/main/docs/protocol.md">protocol notes</a>.</p>
+  </div>
+</section>
+
+<section class="platforms" id="platforms" aria-labelledby="platforms-head">
+  <div class="container">
+    <h2 id="platforms-head">What runs where</h2>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Platform support">
+      <table>
+        <thead><tr><th scope="col">System</th><th scope="col">Audio</th><th scope="col">Panel and MIDI</th><th scope="col">Needs</th></tr></thead>
+        <tbody>
+          <tr class="is-lead"><th scope="row">Linux</th><td>10 out, 12 in through PipeWire or ALSA</td><td>Yes</td><td>The installer</td></tr>
+          <tr><th scope="row">Windows</th><td>In progress</td><td>Yes</td><td>WinUSB bound with Zadig</td></tr>
+          <tr><th scope="row">macOS</th><td>In progress</td><td>Yes</td><td>Nothing</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="faq" aria-labelledby="faq-head">
+  <div class="container faq__grid">
+    <h2 id="faq-head">Before you plug in</h2>
+    <dl class="faq__rows">
+      <div><dt>Do I need Roland’s driver?</dt><dd>No, nothing from Roland ships here.</dd></div>
+      <div><dt>Which sample rates?</dt><dd>The unit’s switch. 44.1&nbsp;kHz is verified, the others are next.</dd></div>
+      <div><dt>Where does the patch bay run?</dt><dd>Inside ua101d, about 8&nbsp;ms late.</dd></div>
+    </dl>
+  </div>
+</section>
+
+<section class="install" id="install" aria-labelledby="install-head">
+  <div class="container">
+    <h2 id="install-head">Install in one line</h2>
+    <div class="cmd cut cmd--wide">
+      <code class="cmd__text" id="cmd-close">curl -fsSL https://raw.githubusercontent.com/devfrp/ua101-rs/main/packaging/linux/install.sh | sh</code>
+      <button class="key" type="button" data-copy="cmd-close">Copy</button>
+    </div>
+    <p class="install__then">Then <code>systemctl --user enable --now ua101d</code> and open <code>ua101-panel</code>.</p>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Release files">
+      <table class="files">
+        <thead><tr><th scope="col">File</th><th scope="col">For</th><th scope="col" class="num">Size</th></tr></thead>
+        <tbody>
+          <tr><td><a href="https://github.com/devfrp/ua101-rs/releases/latest/download/ua101-linux-x86_64.tar.gz"><code>ua101-linux-x86_64.tar.gz</code></a></td><td>Linux</td><td class="num">6.1&nbsp;MB</td></tr>
+          <tr><td><a href="https://github.com/devfrp/ua101-rs/releases/latest/download/ua101-linux-aarch64.tar.gz"><code>ua101-linux-aarch64.tar.gz</code></a></td><td>Linux on ARM</td><td class="num">5.6&nbsp;MB</td></tr>
+          <tr><td><a href="https://github.com/devfrp/ua101-rs/releases/latest/download/ua101-linux-x86_64-musl.tar.gz"><code>ua101-linux-x86_64-musl.tar.gz</code></a></td><td>Alpine, no panel</td><td class="num">2.1&nbsp;MB</td></tr>
+          <tr><td><a href="https://github.com/devfrp/ua101-rs/releases/latest/download/ua101-panel-windows-x86_64.exe"><code>ua101-panel-windows-x86_64.exe</code></a></td><td>Windows panel</td><td class="num">7.8&nbsp;MB</td></tr>
+          <tr><td><a href="https://github.com/devfrp/ua101-rs/releases/latest/download/ua101-macos-universal.dmg"><code>ua101-macos-universal.dmg</code></a></td><td>macOS panel</td><td class="num">8.8&nbsp;MB</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="foot">
+  <div class="container foot__grid">
+    <p class="foot__mark">ua101-rs</p>
+    <nav aria-label="Project">
+      <h3>Project</h3>
+      <ul>
+        <li><a href="https://github.com/devfrp/ua101-rs">Source</a></li>
+        <li><a href="https://github.com/devfrp/ua101-rs/releases">Releases</a></li>
+        <li><a href="https://github.com/devfrp/ua101-rs/issues">Issues</a></li>
+      </ul>
+    </nav>
+    <nav aria-label="Documentation">
+      <h3>Read</h3>
+      <ul>
+        <li><a href="https://github.com/devfrp/ua101-rs#readme">README</a></li>
+        <li><a href="https://github.com/devfrp/ua101-rs/blob/main/docs/protocol.md">Protocol notes</a></li>
+        <li><a href="https://github.com/devfrp/ua101-rs/blob/main/packaging/windows/README.md">Windows setup</a></li>
+      </ul>
+    </nav>
+    <p class="foot__legal">Not affiliated with Roland. UA-101 and EDIROL are Roland trademarks. MIT or Apache-2.0, by <a href="https://github.com/devfrp">devfrp</a>.</p>
+  </div>
+</footer>
+
+<script>window.hallmarkSlots = (m) => { for (const [k, v] of Object.entries(m)) { const s = document.querySelector(`[data-slot="${k}"]`); if (!s) continue; const im = new Image(); im.src = typeof v === 'string' ? v : v.src; im.alt = (typeof v === 'object' && v.alt) || s.dataset.alt || ''; s.querySelectorAll(':scope > img').forEach((o) => o.remove()); s.prepend(im); } };
+document.querySelectorAll('[data-slot] img').forEach((i) => { if (i.complete && !i.naturalWidth) i.remove(); else i.addEventListener('error', () => i.remove(), { once: true }); });</script>
+<script src="app.js" defer></script>
+</body>
+</html>

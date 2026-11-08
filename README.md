@@ -7,6 +7,8 @@ It runs entirely in user space and contains no C code. The protocol was
 reconstructed by static analysis of Roland's original Windows driver, then
 checked against the descriptors of a real unit. See [`docs/protocol.md`](docs/protocol.md).
 
+Website: <https://devfrp.github.io/ua101-rs/> (source in `site/`).
+
 ## Status
 
 | Feature                          | Linux | macOS | Windows |
