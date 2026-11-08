@@ -174,8 +174,8 @@ switch moves):
 | Address        | Switch                 | Values seen |
 |----------------|------------------------|-------------|
 | `00 01 00 02`  | CLOCK                  | `00`, `09`  |
-| `00 01 00 04`  | DIRECT MONITOR SOFT CTRL | `00`, `01` |
-| `00 01 00 05`  | DIRECT MONITOR MONO    | `00`, `01`  |
+| `00 01 00 04`  | DIRECT MONITOR MONO    | `00`, `01`  |
+| `00 01 00 05`  | DIRECT MONITOR SOFT CTRL | `00`, `01` |
 
 The Windows driver parses incoming DT1s by their first address byte
 (`0x1c8c0`: `00`, `01` and `02` blocks).

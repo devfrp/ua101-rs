@@ -162,11 +162,11 @@ pub struct FrontPanel {
     /// `00 01 00 02`: clock source. `0` was seen with the internal clock and
     /// `9` after switching; raw value kept until the encoding is known.
     pub clock: Option<u8>,
-    /// `00 01 00 04`: SOFT CTRL. When off, direct monitoring cannot be
+    /// `00 01 00 04`: DIRECT MONITOR MONO.
+    pub mono: Option<bool>,
+    /// `00 01 00 05`: SOFT CTRL. When off, direct monitoring cannot be
     /// controlled from the computer.
     pub soft_ctrl: Option<bool>,
-    /// `00 01 00 05`: DIRECT MONITOR MONO.
-    pub mono: Option<bool>,
     /// Other bytes of the block, by offset, for diagnostics.
     pub other: [Option<u8>; 6],
 }
@@ -182,8 +182,8 @@ impl FrontPanel {
             let offset = address[3] as usize + i;
             match offset {
                 0x02 => self.clock = Some(v),
-                0x04 => self.soft_ctrl = Some(v != 0),
-                0x05 => self.mono = Some(v != 0),
+                0x04 => self.mono = Some(v != 0),
+                0x05 => self.soft_ctrl = Some(v != 0),
                 _ => {}
             }
             if let Some(slot) = self.other.get_mut(offset) {
