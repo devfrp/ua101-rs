@@ -1,0 +1,17 @@
+/target
+/dist
+
+# Roland's proprietary Windows driver packages are kept locally as
+# reverse-engineering references and must never be redistributed.
+/driverpackage_*.cab
+/UA_101_WinXp_v102/
+/ua101_win7_x64_v100/
+/vendor-drivers/
+*.cab
+*.SYS
+*.sys
+*.CPL
+*.DLL
+
+# Local assistant notes, not part of the project
+/CLAUDE.md

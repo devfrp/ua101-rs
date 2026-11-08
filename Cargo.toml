@@ -1,0 +1,37 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/ua101-protocol",
+    "crates/ua101-usb",
+    "crates/ua101-cli",
+    "crates/ua101-panel",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["devfrp"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/devfrp/ua101-rs"
+homepage = "https://github.com/devfrp/ua101-rs"
+keywords = ["usb", "audio", "driver", "roland", "ua-101"]
+categories = ["hardware-support", "multimedia::audio"]
+
+[workspace.dependencies]
+ua101-protocol = { path = "crates/ua101-protocol", version = "0.1.0" }
+ua101-usb = { path = "crates/ua101-usb", version = "0.1.0" }
+nusb = "0.2.9"
+thiserror = "2.0"
+anyhow = "1.0"
+clap = { version = "4.6", features = ["derive"] }
+hound = "3.5"
+rtrb = "0.3"
+log = "0.4"
+env_logger = "0.11"
+libc = "0.2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

@@ -1,0 +1,21 @@
+[package]
+name = "ua101-usb"
+description = "User-space USB driver for the Roland/EDIROL UA-101, written in Rust"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+ua101-protocol.workspace = true
+nusb.workspace = true
+thiserror.workspace = true
+rtrb.workspace = true
+log.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc.workspace = true

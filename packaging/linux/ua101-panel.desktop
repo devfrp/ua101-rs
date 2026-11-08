@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=UA-101 Panel
+Comment=Control panel for the Roland/EDIROL UA-101
+Exec=@BINDIR@/ua101-panel
+Icon=audio-card
+Terminal=false
+Categories=AudioVideo;Audio;Settings;HardwareSettings;

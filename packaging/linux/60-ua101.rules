@@ -1,0 +1,3 @@
+# Roland/EDIROL UA-101: let the logged-in user (and the "audio" group) open
+# the device node, so the Rust user-space driver runs without root.
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0582", ATTR{idProduct}=="007d", MODE="0660", GROUP="audio", TAG+="uaccess"

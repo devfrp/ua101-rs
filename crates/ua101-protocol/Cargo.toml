@@ -1,0 +1,13 @@
+[package]
+name = "ua101-protocol"
+description = "Platform-independent wire protocol of the Roland/EDIROL UA-101 USB audio interface"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories = ["hardware-support", "multimedia::audio", "no-std"]
+
+[dependencies]
