@@ -223,6 +223,22 @@ confirms the layout below (offsets in the 256 data bytes):
 | `bc`–`f7` | OUTPUT volume, 6 nibbles × 10 |
 | `f8`–`ff` | unused (zero) |
 
+**Patch bay (sub-command 20, `00 02 a b`, block bytes `07`–`15`)** —
+inferred from the panel (`0x140006630`): the value sent for group `a`,
+output pair `b` (0–4 = OUTPUT 1-2 … 9-10) comes from a per-group choice
+table at `0x140092670` (12 entries per group):
+
+| Group `a` | Choices offered | Read back from a unit |
+|-----------|-----------------|-----------------------|
+| 0 | `1 2 3 4 5 6 7 8 9 10 11` | `02 03 04 05 06` |
+| 1 | `1 7 8 9 10 11 2 3 4 5 6` | `07 08 09 0a 01` |
+| 2 | `0 1 7 8 9 10 11 2 3 4 5 6` | `00 00 00 00 00` |
+
+Working hypothesis for the codes: `0` none, `1` monitor mix, `2`–`6` WAVE
+OUT pairs 1-2 … 9-10, `7`–`11` INPUT pairs 1-2 … 9-10 (Hard Thru). Group
+0 matches "Initial setting: WAVE OUT n → OUTPUT n"; groups 1 and 2 are
+not identified yet.
+
 `ua101d` reads this block when a session starts and adopts it; only a
 silent unit (everything muted or at zero, as after power-on with SOFT CTRL)
 gets the daemon's state.
