@@ -96,10 +96,12 @@ fi
 DISTRO_ID="unknown"
 DISTRO_LIKE=""
 if [ -r /etc/os-release ]; then
+    # Source it in a subshell: os-release defines VERSION, NAME and others,
+    # which would otherwise overwrite this script's own variables.
     # shellcheck disable=SC1091
-    . /etc/os-release
-    DISTRO_ID="${ID:-unknown}"
-    DISTRO_LIKE="${ID_LIKE:-}"
+    DISTRO_ID="$(. /etc/os-release && printf '%s' "${ID:-unknown}")"
+    # shellcheck disable=SC1091
+    DISTRO_LIKE="$(. /etc/os-release && printf '%s' "${ID_LIKE:-}")"
 fi
 
 if [ "$LIBC" = "musl" ]; then
