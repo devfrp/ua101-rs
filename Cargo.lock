@@ -2500,7 +2500,7 @@ dependencies = [
 
 [[package]]
 name = "ua101-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2512,7 +2512,7 @@ dependencies = [
 
 [[package]]
 name = "ua101-panel"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "eframe",
  "env_logger",
@@ -2521,11 +2521,11 @@ dependencies = [
 
 [[package]]
 name = "ua101-protocol"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "ua101-usb"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "libc",
  "log",
@@ -2537,7 +2537,7 @@ dependencies = [
 
 [[package]]
 name = "ua101d"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",

@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.85"
 authors = ["devfrp"]
@@ -20,8 +20,8 @@ keywords = ["usb", "audio", "driver", "roland", "ua-101"]
 categories = ["hardware-support", "multimedia::audio"]
 
 [workspace.dependencies]
-ua101-protocol = { path = "crates/ua101-protocol", version = "0.1.0" }
-ua101-usb = { path = "crates/ua101-usb", version = "0.1.0" }
+ua101-protocol = { path = "crates/ua101-protocol", version = "0.1.1" }
+ua101-usb = { path = "crates/ua101-usb", version = "0.1.1" }
 nusb = "0.2.9"
 thiserror = "2.0"
 anyhow = "1.0"
