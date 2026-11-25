@@ -15,7 +15,6 @@ rust-version = "1.85"
 authors = ["devfrp"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/devfrp/ua101-rs"
-homepage = "https://github.com/devfrp/ua101-rs"
 keywords = ["usb", "audio", "driver", "roland", "ua-101"]
 categories = ["hardware-support", "multimedia::audio"]
 

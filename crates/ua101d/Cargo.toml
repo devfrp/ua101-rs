@@ -15,12 +15,12 @@ name = "ua101d"
 path = "src/main.rs"
 
 [dependencies]
-ua101-usb.workspace = true
 anyhow.workspace = true
-clap.workspace = true
 log.workspace = true
 env_logger.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
+ua101-usb.workspace = true
+clap.workspace = true
 libc.workspace = true
 rtrb.workspace = true

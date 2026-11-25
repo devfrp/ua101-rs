@@ -212,11 +212,10 @@ impl MixerState {
         for bus in Bus::ALL {
             let i = bus.index() as usize;
             let n = bus.channels() as usize;
-            for pair in 0..n / 2 {
-                f(set_link(bus, pair as u8, self.links[i][pair]));
+            for (pair, &link) in self.links[i].iter().take(n / 2).enumerate() {
+                f(set_link(bus, pair as u8, link));
             }
-            for ch in 0..n {
-                let c = self.channels[i][ch];
+            for (ch, &c) in self.channels[i].iter().take(n).enumerate() {
                 f(set_mute(bus, ch as u8, c.mute));
                 // MONITOR OUT has no pan in the unit's mixer memory.
                 if bus != Bus::MonitorOut {
@@ -261,11 +260,11 @@ impl MixerState {
         let mut s = Self::initial();
         for bus in Bus::ALL {
             let i = bus.index() as usize;
-            for pair in 0..bus.channels() as usize / 2 {
-                s.links[i][pair] = get_bit(b, block::LINK[i], pair);
+            let n = bus.channels() as usize;
+            for (pair, link) in s.links[i].iter_mut().take(n / 2).enumerate() {
+                *link = get_bit(b, block::LINK[i], pair);
             }
-            for ch in 0..bus.channels() as usize {
-                let c = &mut s.channels[i][ch];
+            for (ch, c) in s.channels[i].iter_mut().take(n).enumerate() {
                 c.mute = get_bit(b, block::MUTE[i], ch);
                 if let Some(base) = block::PAN[i] {
                     c.pan = from_nibbles(&b[base + 4 * ch..base + 4 * ch + 4]) as u16;
