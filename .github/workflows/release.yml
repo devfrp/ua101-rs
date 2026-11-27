@@ -1,6 +1,7 @@
 name: Release
 
-# Push a tag such as v0.1.0 to build every platform and publish a release.
+# Push a tag such as v0.1.0 to build every platform and publish a release
+# (v0.2.0-beta and other suffixed tags are published as pre-releases).
 on:
   push:
     tags: ["v*"]
@@ -132,3 +133,6 @@ jobs:
         with:
           files: artifacts/*
           generate_release_notes: true
+          # A tag with a suffix (v0.2.0-beta) is a pre-release: GitHub's
+          # "latest" link, used by install.sh, keeps pointing at the stable one.
+          prerelease: ${{ contains(github.ref_name, '-') }}

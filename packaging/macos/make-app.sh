@@ -21,7 +21,10 @@ for bin in ua101-panel ua101; do
         "$ROOT/target/aarch64-apple-darwin/release/$bin" \
         -output "$APP/Contents/MacOS/$bin"
 done
-sed "s/@VERSION@/${VERSION#v}/g" "$ROOT/packaging/macos/Info.plist" > "$APP/Contents/Info.plist"
+# Bundle versions must be numeric: v0.2.0-beta -> 0.2.0.
+BUNDLE_VERSION="${VERSION#v}"
+BUNDLE_VERSION="${BUNDLE_VERSION%%-*}"
+sed "s/@VERSION@/${BUNDLE_VERSION}/g" "$ROOT/packaging/macos/Info.plist" > "$APP/Contents/Info.plist"
 
 # Ad-hoc signature so Apple Silicon accepts the universal binary.
 codesign --force --deep --sign - "$APP"
