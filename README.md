@@ -43,7 +43,7 @@ The script:
 - installs `ua101`, `ua101-panel` and a udev rule that gives access to the
   card without root.
 
-Options: `sh -s -- --cli-only`, `--no-deps`, `--version v0.2.0-beta`,
+Options: `sh -s -- --cli-only`, `--no-deps`, `--version v0.2.0-beta.2`,
 `--prefix ~/.local`, `--blacklist-kernel` (stops the in-kernel `snd-ua101`
 driver from claiming the card), `--uninstall`.
 
