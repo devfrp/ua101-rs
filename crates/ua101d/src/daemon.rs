@@ -398,6 +398,9 @@ fn session(args: &Args, shared: &mut Shared) -> Result<()> {
             if let Some(report) = now.since(&glitches) {
                 warn!("audio glitches in the last second: {report}");
             }
+            if let Some(report) = now.drift_since(&glitches) {
+                log::debug!("clock drift corrections in the last second: {report}");
+            }
             glitches = now;
         }
         if !ctl.is_running() {
@@ -538,9 +541,9 @@ impl Glitches {
         }
     }
 
-    /// What changed since `before`, or `None` when nothing did.
+    /// Audible glitches since `before` (xruns and USB errors), or `None`.
     fn since(&self, before: &Self) -> Option<String> {
-        let fields = [
+        Self::report(&[
             (
                 "USB playback underrun frames",
                 self.usb_underruns,
@@ -557,16 +560,26 @@ impl Glitches {
                 before.usb_packet_errors,
             ),
             ("to-device xruns", self.to_xruns, before.to_xruns),
+            ("from-device xruns", self.from_xruns, before.from_xruns),
+        ])
+    }
+
+    /// Clock-drift corrections since `before`, or `None`. They are smooth
+    /// (one period stretched by a frame) and expected a few times a second.
+    fn drift_since(&self, before: &Self) -> Option<String> {
+        Self::report(&[
             ("to-device drops", self.to_drops, before.to_drops),
             ("to-device repeats", self.to_repeats, before.to_repeats),
-            ("from-device xruns", self.from_xruns, before.from_xruns),
             ("from-device drops", self.from_drops, before.from_drops),
             (
                 "from-device repeats",
                 self.from_repeats,
                 before.from_repeats,
             ),
-        ];
+        ])
+    }
+
+    fn report(fields: &[(&str, u64, u64)]) -> Option<String> {
         let parts: Vec<String> = fields
             .iter()
             .filter(|(_, now, then)| now != then)
@@ -586,12 +599,17 @@ mod glitch_tests {
         assert_eq!(before.since(&before), None);
         let now = Glitches {
             to_drops: 3,
+            from_xruns: 1,
             usb_underruns: 12,
             ..before
         };
         assert_eq!(
             now.since(&before).as_deref(),
-            Some("USB playback underrun frames +12, to-device drops +3")
+            Some("USB playback underrun frames +12, from-device xruns +1")
+        );
+        assert_eq!(
+            now.drift_since(&before).as_deref(),
+            Some("to-device drops +3")
         );
     }
 }
