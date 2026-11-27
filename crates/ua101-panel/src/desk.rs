@@ -1,34 +1,45 @@
-//! The mixer drawn as a console desk: a brushed blue plate, channel strips
-//! with M and S keys, a pan knob, a dB-scaled fader beside its meter, LINK
-//! bars under each pair, and a master section on the right with the sample
-//! rate on a seven-segment display. The desk is laid out in desk units and
-//! scaled to the window, so it keeps its proportions at any size.
+//! The mixer drawn as one console: a header bar with the unit's state and
+//! the device buttons, then one card per mixer section. Each strip has its
+//! channel tab, MUTE and SOLO pills, a pan bar, an LED ladder meter beside
+//! a dB-scaled fader, a dB read-out, and a link button between the two
+//! channels of each pair. Everything is laid out in desk units and scaled
+//! to the window, so the console keeps its proportions at any size.
 
 use eframe::egui::{
-    self, Align2, Color32, FontId, Id, Mesh, Painter, Pos2, Rect, Response, RichText, Sense,
-    Stroke, StrokeKind, Ui, Vec2, pos2, vec2,
+    self, Align2, Color32, FontId, Id, Mesh, Painter, Pos2, Rect, Response, Sense, Stroke,
+    StrokeKind, Ui, pos2, vec2,
 };
 use ua101_usb::protocol::mixer::Bus;
 
-use crate::{FADER_MAX_DB, FADER_MIN_DB, Panel, format_db};
+use crate::{FADER_MAX_DB, FADER_MIN_DB, Panel, format_db, theme};
 
 // ---------------------------------------------------------------- layout
 
-const STRIP_W: f32 = 40.0;
 const MARGIN: f32 = 14.0;
-const GAP: f32 = 14.0;
-const MASTER_W: f32 = 156.0;
-const HEADER_H: f32 = 34.0;
-/// Top of the fader travel, from the top of the strips.
-const FADER_TOP: f32 = 104.0;
-const FADER_H: f32 = 270.0;
-const STRIP_H: f32 = FADER_TOP + FADER_H + 64.0;
+const STRIP_W: f32 = 44.0;
+/// Inner padding of a section card.
+const PAD: f32 = 6.0;
+const SECTION_GAP: f32 = 12.0;
+const HEADER_H: f32 = 58.0;
+const CARD_TOP: f32 = MARGIN + HEADER_H + 10.0;
+/// Title band of a section card.
+const TITLE_H: f32 = 26.0;
+/// From the top of a strip: the fader travel.
+const FADER_TOP: f32 = 100.0;
+const FADER_H: f32 = 236.0;
+const STRIP_H: f32 = FADER_TOP + FADER_H + 54.0;
+const CARD_H: f32 = TITLE_H + STRIP_H + 6.0;
+const DESK_H: f32 = CARD_TOP + CARD_H + MARGIN;
 const SECTIONS: [Bus; 3] = [Bus::Input, Bus::Output, Bus::MonitorOut];
-const DESK_H: f32 = MARGIN + HEADER_H + STRIP_H + MARGIN;
+/// Segments of the LED ladder meter, -60 to 0 dBFS.
+const LADDER: usize = 24;
 
 fn desk_w() -> f32 {
     let strips: f32 = SECTIONS.iter().map(|b| b.channels() as f32).sum();
-    MARGIN + strips * STRIP_W + SECTIONS.len() as f32 * GAP + MASTER_W + MARGIN
+    2.0 * MARGIN
+        + strips * STRIP_W
+        + SECTIONS.len() as f32 * 2.0 * PAD
+        + (SECTIONS.len() - 1) as f32 * SECTION_GAP
 }
 
 /// Fader taper: (dB, position from the top of the travel). The bottom is
@@ -83,52 +94,37 @@ impl Geo {
     fn font(&self, size: f32) -> FontId {
         FontId::proportional(size * self.s)
     }
+    fn mono(&self, size: f32) -> FontId {
+        FontId::monospace(size * self.s)
+    }
 }
 
 // ---------------------------------------------------------------- palette
 
-const PLATE_TOP: Color32 = Color32::from_rgb(0x23, 0x40, 0x94);
-const PLATE_BOTTOM: Color32 = Color32::from_rgb(0x15, 0x2b, 0x6e);
-const PLATE_EDGE: Color32 = Color32::from_rgb(0x07, 0x0b, 0x18);
-const LEGEND: Color32 = Color32::from_rgb(0xe9, 0xee, 0xf8);
-const LEGEND_DIM: Color32 = Color32::from_rgb(0xa9, 0xb7, 0xdd);
-const RULE: Color32 = Color32::from_rgba_premultiplied(0x9a, 0xb0, 0xf0, 0x50);
-const KEY: Color32 = Color32::from_rgb(0xb4, 0xb8, 0xc1);
-const KEY_OFF: Color32 = Color32::from_rgb(0x5d, 0x63, 0x73);
-const KEY_TEXT: Color32 = Color32::from_rgb(0x1f, 0x22, 0x2a);
-const MUTE_LIT: Color32 = Color32::from_rgb(0xff, 0x5c, 0x5c);
-const LINK_LIT: Color32 = Color32::from_rgb(0xa8, 0xf0, 0xb8);
-const LAMP_ON: Color32 = Color32::from_rgb(0xff, 0x77, 0x77);
-const OK: Color32 = Color32::from_rgb(0x74, 0xf0, 0xa0);
-const WARN: Color32 = Color32::from_rgb(0xf5, 0xc5, 0x42);
-const BAD: Color32 = Color32::from_rgb(0xff, 0x55, 0x55);
-const WELL: Color32 = Color32::from_rgb(0x07, 0x0b, 0x1a);
-const SLOT: Color32 = Color32::from_rgb(0x04, 0x06, 0x0e);
-/// Meter colours, low to high: blue, sky blue, yellow (readable by
-/// colour-blind users and in grey).
-const METER: [(f32, Color32); 3] = [
-    (0.0, Color32::from_rgb(0x1c, 0x5f, 0xc8)),
-    (0.65, Color32::from_rgb(0x2f, 0xb4, 0xe6)),
-    (1.0, Color32::from_rgb(0xf2, 0xd0, 0x3c)),
-];
-const PEAK_LINE: Color32 = Color32::from_rgb(0xe8, 0xf0, 0xff);
-const CLIP: Color32 = Color32::from_rgb(0xff, 0x5a, 0x1f);
-const SEG_ON: Color32 = Color32::from_rgb(0xff, 0x2e, 0x2e);
-const SEG_OFF: Color32 = Color32::from_rgb(0x3a, 0x08, 0x0a);
+const SURFACE_TOP: Color32 = Color32::from_rgb(0x1d, 0x20, 0x25);
+const SURFACE_BOTTOM: Color32 = Color32::from_rgb(0x14, 0x16, 0x1a);
+const CARD: Color32 = theme::CARD;
+const BORDER: Color32 = theme::BORDER;
+const TEXT: Color32 = theme::TEXT;
+const DIM: Color32 = theme::TEXT_DIM;
+const CONTROL: Color32 = Color32::from_rgb(0x2d, 0x31, 0x38);
+const CONTROL_EDGE: Color32 = Color32::from_rgb(0x3b, 0x40, 0x49);
+const INSET: Color32 = Color32::from_rgb(0x0f, 0x11, 0x14);
+const LED_OFF: Color32 = Color32::from_rgb(0x41, 0x46, 0x4e);
+const MUTE_LED: Color32 = Color32::from_rgb(0xff, 0x4d, 0x4d);
+const LCD_BG: Color32 = Color32::from_rgb(0x0b, 0x16, 0x10);
+const LCD_EDGE: Color32 = Color32::from_rgb(0x1e, 0x35, 0x28);
+const LCD_FG: Color32 = Color32::from_rgb(0x6c, 0xf0, 0xa0);
+const OK: Color32 = theme::GREEN;
+const WARN: Color32 = theme::YELLOW;
+const BAD: Color32 = Color32::from_rgb(0xf0, 0x55, 0x4a);
+const METER_LOW: Color32 = Color32::from_rgb(0x3d, 0xd6, 0x8c);
+const METER_MID: Color32 = Color32::from_rgb(0xf5, 0xc5, 0x42);
+const METER_HIGH: Color32 = Color32::from_rgb(0xff, 0x4d, 0x4d);
 
 fn lerp(a: Color32, b: Color32, t: f32) -> Color32 {
     let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
     Color32::from_rgb(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()))
-}
-
-fn meter_color(f: f32) -> Color32 {
-    for w in METER.windows(2) {
-        let ((f0, c0), (f1, c1)) = (w[0], w[1]);
-        if f <= f1 {
-            return lerp(c0, c1, ((f - f0) / (f1 - f0)).clamp(0.0, 1.0));
-        }
-    }
-    METER[METER.len() - 1].1
 }
 
 fn vgrad(p: &Painter, r: Rect, top: Color32, bottom: Color32) {
@@ -142,7 +138,32 @@ fn vgrad(p: &Painter, r: Rect, top: Color32, bottom: Color32) {
     p.add(m);
 }
 
+/// Colour of ladder segment `i` (0 = bottom): green, yellow from -18 dBFS,
+/// red from -6 dBFS.
+fn segment_color(i: usize) -> Color32 {
+    let top_db = -60.0 + 60.0 * (i + 1) as f32 / LADDER as f32;
+    if top_db > -6.0 {
+        METER_HIGH
+    } else if top_db > -18.0 {
+        METER_MID
+    } else {
+        METER_LOW
+    }
+}
+
+/// Fraction of the ladder lit for a linear level.
+fn level_frac(l: f32) -> f32 {
+    if l > 0.0 {
+        ((20.0 * l.log10() + 60.0) / 60.0).clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
 // ---------------------------------------------------------------- widgets
+
+/// A titled group of header LEDs: (label, state, colour when on, tooltip).
+type LedGroup<'a> = (&'a str, f32, [(&'a str, Option<bool>, Color32, &'a str); 2]);
 
 /// Peak hold and clip light of one meter.
 #[derive(Clone, Copy, Default)]
@@ -155,41 +176,82 @@ pub struct Hold {
 const PEAK_HOLD_S: f64 = 1.5;
 const CLIP_HOLD_S: f64 = 2.0;
 
-fn plate(p: &Painter, rect: Rect, s: f32) {
-    p.rect_filled(rect.expand(3.0 * s), 7.0 * s, PLATE_EDGE);
-    vgrad(p, rect, PLATE_TOP, PLATE_BOTTOM);
-    // Brushed metal: faint horizontal lines of varying brightness.
-    let mut y = rect.top();
-    let mut i: u32 = 0;
-    while y < rect.bottom() {
-        let h = i.wrapping_mul(2_654_435_761).rotate_right(13);
-        let a = (h % 10) as u8;
-        let c = if h & 0x100 != 0 {
-            Color32::from_white_alpha(a)
-        } else {
-            Color32::from_black_alpha(a + 6)
-        };
-        p.hline(rect.x_range(), y, Stroke::new(1.0, c));
-        y += 1.5;
-        i += 1;
+fn led(p: &Painter, c: Pos2, r: f32, on: Option<Color32>) {
+    match on {
+        Some(color) => {
+            p.circle_filled(c, r * 2.0, color.gamma_multiply(0.18));
+            p.circle_filled(c, r, color);
+        }
+        None => {
+            p.circle_filled(c, r, LED_OFF);
+        }
     }
-    p.hline(
-        rect.x_range(),
-        rect.top() + 0.5,
-        Stroke::new(1.0, Color32::from_white_alpha(40)),
-    );
 }
 
-/// A square key. `lit` gives its colour when on; a disabled key only
-/// shows its tooltip.
-fn key(
+/// A rounded pill with an LED, such as MUTE. `lit` is the LED colour when
+/// on; a disabled pill only shows its tooltip.
+fn pill(
     ui: &Ui,
+    g: Geo,
     rect: Rect,
     id: Id,
     label: &str,
     lit: Option<Color32>,
     enabled: bool,
-    s: f32,
+) -> Response {
+    let s = g.s;
+    let r = ui.interact(
+        rect,
+        id,
+        if enabled {
+            Sense::click()
+        } else {
+            Sense::hover()
+        },
+    );
+    let p = ui.painter();
+    let radius = rect.height() / 2.0;
+    let mut body = CONTROL;
+    if enabled && r.hovered() {
+        body = lerp(body, Color32::WHITE, 0.08);
+    }
+    if let (Some(c), true) = (lit, enabled) {
+        body = lerp(body, c, 0.18);
+    }
+    p.rect_filled(rect, radius, body);
+    p.rect_stroke(
+        rect,
+        radius,
+        Stroke::new(1.0, CONTROL_EDGE),
+        StrokeKind::Inside,
+    );
+    let alpha = if enabled { 1.0 } else { 0.35 };
+    led(
+        p,
+        pos2(rect.left() + radius + 1.0 * s, rect.center().y),
+        2.4 * s,
+        lit.filter(|_| enabled),
+    );
+    let color = if lit.is_some() && enabled { TEXT } else { DIM };
+    p.text(
+        pos2(rect.center().x + 4.5 * s, rect.center().y),
+        Align2::CENTER_CENTER,
+        label,
+        g.font(7.5),
+        color.gamma_multiply(alpha),
+    );
+    r
+}
+
+/// A header button; `lit` fills it with that colour.
+fn button(
+    ui: &Ui,
+    g: Geo,
+    rect: Rect,
+    id: Id,
+    label: &str,
+    lit: Option<Color32>,
+    enabled: bool,
 ) -> Response {
     let r = ui.interact(
         rect,
@@ -201,89 +263,38 @@ fn key(
         },
     );
     let p = ui.painter();
-    let cr = 2.0 * s;
-    p.rect_filled(
-        rect.translate(vec2(0.0, 1.5 * s)),
-        cr,
-        Color32::from_black_alpha(120),
-    );
-    let mut body = if enabled { lit.unwrap_or(KEY) } else { KEY_OFF };
+    let mut body = lit.map_or(CONTROL, |c| lerp(CONTROL, c, 0.55));
     if enabled && r.hovered() {
-        body = lerp(body, Color32::WHITE, 0.18);
+        body = lerp(body, Color32::WHITE, 0.08);
     }
-    if lit.is_some() && enabled {
-        p.rect_filled(rect.expand(2.0 * s), 3.0 * s, body.gamma_multiply(0.25));
-    }
-    p.rect_filled(rect, cr, body);
-    p.rect_filled(
-        Rect::from_min_max(rect.min, pos2(rect.max.x, rect.center().y)),
-        cr,
-        Color32::from_white_alpha(30),
-    );
+    p.rect_filled(rect, 6.0 * g.s, body);
     p.rect_stroke(
         rect,
-        cr,
-        Stroke::new(1.0, Color32::from_black_alpha(150)),
+        6.0 * g.s,
+        Stroke::new(1.0, CONTROL_EDGE),
         StrokeKind::Inside,
     );
-    if !label.is_empty() {
-        let tc = if enabled {
-            KEY_TEXT
+    p.text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        label,
+        g.font(8.5),
+        if enabled {
+            TEXT
         } else {
-            Color32::from_rgb(0x2e, 0x32, 0x3c)
-        };
-        let size = (rect.height() * 0.55).min(10.5 * s);
-        p.text(
-            rect.center(),
-            Align2::CENTER_CENTER,
-            label,
-            FontId::proportional(size),
-            tc,
-        );
-    }
-    r
-}
-
-/// A read-only lamp: on, off, or unknown (`None`).
-fn lamp(ui: &Ui, rect: Rect, id: Id, state: Option<bool>, s: f32) -> Response {
-    let r = ui.interact(rect, id, Sense::hover());
-    let p = ui.painter();
-    let cr = 2.0 * s;
-    p.rect_filled(
-        rect.translate(vec2(0.0, 1.5 * s)),
-        cr,
-        Color32::from_black_alpha(120),
-    );
-    let body = match state {
-        Some(true) => {
-            p.rect_filled(rect.expand(3.0 * s), 4.0 * s, LAMP_ON.gamma_multiply(0.3));
-            LAMP_ON
-        }
-        Some(false) => KEY,
-        None => KEY_OFF,
-    };
-    p.rect_filled(rect, cr, body);
-    p.rect_filled(
-        Rect::from_min_max(rect.min, pos2(rect.max.x, rect.center().y)),
-        cr,
-        Color32::from_white_alpha(35),
-    );
-    p.rect_stroke(
-        rect,
-        cr,
-        Stroke::new(1.0, Color32::from_black_alpha(150)),
-        StrokeKind::Inside,
+            DIM.gamma_multiply(0.5)
+        },
     );
     r
 }
 
-/// Rotary pan knob around `c`. Drag up or right to turn right, scroll,
-/// double-click to centre.
-fn knob(ui: &Ui, g: Geo, c: Pos2, id: Id, pan: &mut i32) -> Response {
+/// Horizontal pan bar centred on `c`: drag sideways, scroll, double-click
+/// to centre. The fill grows from the centre in the section's colour.
+fn pan_bar(ui: &Ui, g: Geo, c: Pos2, id: Id, pan: &mut i32, accent: Color32) -> Response {
     let s = g.s;
-    let rad = 11.0 * s;
+    let half = 16.0 * s;
     let r = ui.interact(
-        Rect::from_center_size(c, Vec2::splat(rad * 2.6)),
+        Rect::from_center_size(c, vec2(half * 2.0 + 8.0 * s, 14.0 * s)),
         id,
         Sense::click_and_drag(),
     );
@@ -292,10 +303,10 @@ fn knob(ui: &Ui, g: Geo, c: Pos2, id: Id, pan: &mut i32) -> Response {
         ui.data_mut(|d| d.insert_temp(acc_id, *pan as f32));
     }
     if r.dragged() {
-        let d = r.drag_delta();
+        let dx = r.drag_delta().x / (half * 2.0) * 127.0;
         let acc = ui.data_mut(|m| {
             let a = m.get_temp_mut_or(acc_id, *pan as f32);
-            *a = (*a + (d.x - d.y) / s * 0.6).clamp(-64.0, 63.0);
+            *a = (*a + dx).clamp(-64.0, 63.0);
             *a
         });
         *pan = acc.round() as i32;
@@ -309,124 +320,50 @@ fn knob(ui: &Ui, g: Geo, c: Pos2, id: Id, pan: &mut i32) -> Response {
     if r.double_clicked() {
         *pan = 0;
     }
-
     let p = ui.painter();
+    let track = Rect::from_center_size(c, vec2(half * 2.0, 4.0 * s));
+    p.rect_filled(track, 2.0 * s, INSET);
     let frac = if *pan < 0 {
         *pan as f32 / 64.0
     } else {
         *pan as f32 / 63.0
     };
-    let sweep = 135f32.to_radians();
-    let dir = |a: f32| vec2(a.sin(), -a.cos());
-    for a in [-sweep, 0.0, sweep] {
-        p.line_segment(
-            [c + dir(a) * (rad + 2.0 * s), c + dir(a) * (rad + 5.0 * s)],
-            Stroke::new(1.2 * s, LEGEND_DIM),
-        );
-    }
-    p.circle_filled(
-        c + vec2(1.0, 2.0) * s,
-        rad + 1.0 * s,
-        Color32::from_black_alpha(130),
+    let x = c.x + frac * half;
+    let fill = Rect::from_x_y_ranges(c.x.min(x)..=c.x.max(x), track.y_range());
+    p.rect_filled(fill, 2.0 * s, accent);
+    p.vline(
+        c.x,
+        (c.y - 5.0 * s)..=(c.y + 5.0 * s),
+        Stroke::new(1.0, DIM),
     );
-    p.circle_filled(c, rad, Color32::from_rgb(0x16, 0x17, 0x1c));
-    p.circle_filled(
-        c - vec2(2.5, 3.0) * s,
-        rad * 0.55,
-        Color32::from_white_alpha(14),
-    );
-    p.circle_stroke(
-        c,
-        rad,
-        Stroke::new(1.2 * s, Color32::from_rgb(0x5a, 0x5e, 0x68)),
-    );
-    let a = frac * sweep;
-    p.line_segment(
-        [c + dir(a) * rad * 0.3, c + dir(a) * rad * 0.92],
-        Stroke::new(2.0 * s, Color32::WHITE),
-    );
-    let f = g.font(7.5);
-    p.text(
-        c + vec2(-rad - 1.0 * s, rad + 4.0 * s),
-        Align2::CENTER_CENTER,
-        "L",
-        f.clone(),
-        LEGEND,
-    );
-    p.text(
-        c + vec2(rad + 1.0 * s, rad + 4.0 * s),
-        Align2::CENTER_CENTER,
-        "R",
-        f,
-        LEGEND,
-    );
+    p.circle_filled(pos2(x, c.y), 4.5 * s, TEXT);
+    p.circle_stroke(pos2(x, c.y), 4.5 * s, Stroke::new(1.0, INSET));
     r
 }
 
-/// Fader cap colours, as on a console: black on inputs, silver on the
-/// computer's outputs, red on the master.
-fn cap_colors(bus: Bus) -> (Color32, Color32, Color32) {
-    match bus {
-        Bus::Input => (
-            Color32::from_rgb(0x2a, 0x2b, 0x30),
-            Color32::from_rgb(0x0c, 0x0c, 0x0f),
-            Color32::WHITE,
-        ),
-        Bus::Output => (
-            Color32::from_rgb(0xdc, 0xdf, 0xe4),
-            Color32::from_rgb(0x8a, 0x8f, 0x98),
-            Color32::from_rgb(0x30, 0x33, 0x3a),
-        ),
-        Bus::MonitorOut => (
-            Color32::from_rgb(0xe0, 0x3a, 0x30),
-            Color32::from_rgb(0x8a, 0x14, 0x12),
-            Color32::WHITE,
-        ),
-    }
-}
-
-/// Fader on the track at `x`; drag the cap, scroll over the travel,
-/// double-click for 0 dB.
-fn fader(ui: &Ui, g: Geo, x: f32, top: f32, id: Id, bus: Bus, db: &mut f32) -> Response {
+/// Fader on the track at `x`, with its scale on the right: drag the cap,
+/// scroll over the travel, double-click for 0 dB.
+fn fader(ui: &Ui, g: Geo, x: f32, top: f32, id: Id, accent: Color32, db: &mut f32) -> Response {
     let s = g.s;
     let p = ui.painter();
-    // Scale.
-    let f = g.font(7.5);
+    let f = g.font(7.0);
     for &(d, t) in &TAPER {
         let y = top + t * FADER_H;
         let label = if d <= FADER_MIN_DB {
-            "∞".to_string()
+            "-∞".to_string()
         } else if d > 0.0 {
             format!("+{}", d as i32)
         } else {
-            format!("{}", (-d) as i32)
+            format!("{}", d as i32)
         };
-        p.text(
-            g.p(x - 9.0, y),
-            Align2::RIGHT_CENTER,
-            label,
-            f.clone(),
-            LEGEND,
-        );
-        p.line_segment(
-            [g.p(x - 8.0, y), g.p(x - 4.5, y)],
-            Stroke::new(1.0 * s, LEGEND_DIM),
-        );
+        p.text(g.p(x + 6.0, y), Align2::LEFT_CENTER, label, f.clone(), DIM);
     }
-    // Slot.
-    let slot = g.r(x - 2.0, top - 6.0, 4.0, FADER_H + 12.0);
-    p.rect_filled(slot, 2.0 * s, SLOT);
-    p.rect_stroke(
-        slot,
-        2.0 * s,
-        Stroke::new(1.0, Color32::from_rgb(0x3b, 0x52, 0x9a)),
-        StrokeKind::Outside,
-    );
+    let track = g.r(x - 1.5, top - 4.0, 3.0, FADER_H + 8.0);
+    p.rect_filled(track, 1.5 * s, INSET);
 
-    // Cap and interaction.
-    let cap_at = |db: f32| g.r(x - 10.0, top + db_to_t(db) * FADER_H - 15.0, 20.0, 30.0);
+    let cap_at = |db: f32| g.r(x - 10.0, top + db_to_t(db) * FADER_H - 7.0, 20.0, 14.0);
     let travel = ui.interact(
-        g.r(x - 12.0, top - 15.0, 24.0, FADER_H + 30.0),
+        g.r(x - 12.0, top - 8.0, 24.0, FADER_H + 16.0),
         id.with("travel"),
         Sense::hover(),
     );
@@ -461,58 +398,63 @@ fn fader(ui: &Ui, g: Geo, x: f32, top: f32, id: Id, bus: Bus, db: &mut f32) -> R
     }
 
     let cap = cap_at(*db);
-    let (body, ridge, line) = cap_colors(bus);
     p.rect_filled(
-        cap.translate(vec2(1.5, 2.5) * s),
-        2.0 * s,
-        Color32::from_black_alpha(140),
+        cap.translate(vec2(0.0, 2.0) * s),
+        3.0 * s,
+        Color32::from_black_alpha(110),
     );
-    vgrad(p, cap, lerp(body, Color32::WHITE, 0.12), ridge);
-    let mut yy = cap.top() + 3.0 * s;
-    while yy < cap.bottom() - 2.0 * s {
-        p.hline(
-            cap.x_range().shrink(2.0 * s),
-            yy,
-            Stroke::new(1.0, ridge.gamma_multiply(0.8)),
-        );
-        yy += 3.0 * s;
-    }
-    p.hline(cap.x_range(), cap.center().y, Stroke::new(2.0 * s, line));
+    let (top_c, bottom_c) = if r.hovered() || r.dragged() {
+        (
+            Color32::from_rgb(0x55, 0x5b, 0x66),
+            Color32::from_rgb(0x3a, 0x3f, 0x48),
+        )
+    } else {
+        (
+            Color32::from_rgb(0x4a, 0x50, 0x5a),
+            Color32::from_rgb(0x30, 0x34, 0x3c),
+        )
+    };
+    p.rect_filled(cap, 3.0 * s, bottom_c);
+    vgrad(p, cap.shrink(1.5 * s), top_c, bottom_c);
+    p.hline(
+        cap.x_range().shrink(3.0 * s),
+        cap.center().y,
+        Stroke::new(2.0 * s, accent),
+    );
     p.rect_stroke(
         cap,
-        2.0 * s,
-        Stroke::new(1.0, Color32::from_black_alpha(170)),
+        3.0 * s,
+        Stroke::new(1.0, Color32::from_black_alpha(160)),
         StrokeKind::Inside,
     );
     r.union(travel)
 }
 
-/// Peak meter from -60 dBFS (bottom) to 0 dBFS (top), with a peak line held
-/// 1.5 s and a clip light held 2 s. `level` is linear, 0.0–1.0.
-fn meter(ui: &Ui, g: Geo, x: f32, top: f32, level: Option<f32>, hold: &mut Hold) {
+/// LED ladder from -60 dBFS (bottom) to 0 dBFS (top), with a held peak
+/// segment and a clip LED. `level` is linear, 0.0–1.0; `None` when the
+/// level of this strip is not measured.
+fn ladder(ui: &Ui, g: Geo, x: f32, top: f32, level: Option<f32>, hold: &mut Hold) {
     let s = g.s;
     let p = ui.painter();
-    let well = g.r(x, top - 6.0, 5.0, FADER_H + 12.0);
-    let clip = g.r(x, top - 12.0, 5.0, 4.0);
-    p.rect_filled(well, 1.5 * s, WELL);
-    p.rect_stroke(
-        well,
-        1.5 * s,
-        Stroke::new(1.0, Color32::from_rgb(0x2c, 0x40, 0x80)),
-        StrokeKind::Outside,
-    );
+    let gap = 1.5;
+    let seg_h = (FADER_H - (LADDER - 1) as f32 * gap) / LADDER as f32;
+    let clip = g.r(x, top - 9.0, 5.0, 5.0);
+    let seg = |i: usize| {
+        g.r(
+            x,
+            top + FADER_H - (i + 1) as f32 * (seg_h + gap) + gap,
+            5.0,
+            seg_h,
+        )
+    };
     let Some(level) = level else {
-        p.rect_filled(clip, 1.0 * s, WELL);
+        for i in 0..LADDER {
+            p.rect_filled(seg(i), 1.0 * s, Color32::from_rgb(0x26, 0x29, 0x2f));
+        }
+        p.rect_filled(clip, 1.0 * s, Color32::from_rgb(0x26, 0x29, 0x2f));
         return;
     };
     let now = ui.input(|i| i.time);
-    let frac = |l: f32| {
-        if l > 0.0 {
-            ((20.0 * l.log10() + 60.0) / 60.0).clamp(0.0, 1.0)
-        } else {
-            0.0
-        }
-    };
     if level >= hold.peak || now - hold.peak_at > PEAK_HOLD_S {
         hold.peak = level;
         hold.peak_at = now;
@@ -520,96 +462,52 @@ fn meter(ui: &Ui, g: Geo, x: f32, top: f32, level: Option<f32>, hold: &mut Hold)
     if level >= 0.999 {
         hold.clip_at = Some(now);
     }
-    let lit = frac(level);
-    let inner = well.shrink(1.0 * s);
-    let y_of = |f: f32| inner.bottom() - inner.height() * f;
-    for w in METER.windows(2) {
-        let (f0, f1) = (w[0].0, w[1].0.min(lit));
-        if f1 <= f0 {
-            break;
-        }
-        let r = Rect::from_x_y_ranges(inner.x_range(), y_of(f1)..=y_of(f0));
-        vgrad(p, r, meter_color(f1), meter_color(f0));
-    }
-    let pk = frac(hold.peak);
-    if pk > 0.0 {
-        p.hline(inner.x_range(), y_of(pk), Stroke::new(1.5 * s, PEAK_LINE));
+    let lit = (level_frac(level) * LADDER as f32).round() as usize;
+    let peak = (level_frac(hold.peak) * LADDER as f32).round() as usize;
+    for i in 0..LADDER {
+        let c = segment_color(i);
+        let on = i < lit || (peak > 0 && i == peak - 1);
+        p.rect_filled(seg(i), 1.0 * s, if on { c } else { lerp(INSET, c, 0.16) });
     }
     let clipping = hold.clip_at.is_some_and(|t| now - t < CLIP_HOLD_S);
-    p.rect_filled(clip, 1.0 * s, if clipping { CLIP } else { WELL });
-    if pk > 0.0 || clipping {
+    p.rect_filled(
+        clip,
+        1.0 * s,
+        if clipping {
+            METER_HIGH
+        } else {
+            lerp(INSET, METER_HIGH, 0.16)
+        },
+    );
+    if peak > 0 || clipping {
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(100));
     }
 }
 
-/// Seven-segment read-out of `text` (digits, `-` and `.`) in `rect`.
-fn seven_seg(p: &Painter, rect: Rect, text: &str) {
-    // Segments a..g as bits 0..6.
-    let bits = |c: char| -> u8 {
-        match c {
-            '0' => 0b011_1111,
-            '1' => 0b000_0110,
-            '2' => 0b101_1011,
-            '3' => 0b100_1111,
-            '4' => 0b110_0110,
-            '5' => 0b110_1101,
-            '6' => 0b111_1101,
-            '7' => 0b000_0111,
-            '8' => 0b111_1111,
-            '9' => 0b110_1111,
-            '-' => 0b100_0000,
-            _ => 0,
-        }
-    };
-    let cells: Vec<(u8, bool)> = {
-        let mut v: Vec<(u8, bool)> = Vec::new();
-        for c in text.chars() {
-            if c == '.' {
-                if let Some(last) = v.last_mut() {
-                    last.1 = true;
-                }
-            } else {
-                v.push((bits(c), false));
-            }
-        }
-        v
-    };
-    let n = cells.len().max(1) as f32;
-    let h = rect.height() * 0.74;
-    let w = h * 0.5;
-    let gap = w * 0.45;
-    let total = n * w + (n - 1.0) * gap;
-    let x0 = rect.center().x - total / 2.0;
-    let y0 = rect.center().y - h / 2.0;
-    let th = (h * 0.11).max(1.5);
-    let skew = 0.1;
-    for (i, &(b, dot)) in cells.iter().enumerate() {
-        let left = x0 + i as f32 * (w + gap);
-        // Points of the digit, slanted.
-        let pt = |fx: f32, fy: f32| {
-            let y = y0 + fy * h;
-            pos2(left + fx * w + (0.5 - fy) * h * skew, y)
-        };
-        let segs = [
-            (pt(0.12, 0.0), pt(0.88, 0.0)),
-            (pt(1.0, 0.08), pt(1.0, 0.44)),
-            (pt(1.0, 0.56), pt(1.0, 0.92)),
-            (pt(0.12, 1.0), pt(0.88, 1.0)),
-            (pt(0.0, 0.56), pt(0.0, 0.92)),
-            (pt(0.0, 0.08), pt(0.0, 0.44)),
-            (pt(0.12, 0.5), pt(0.88, 0.5)),
-        ];
-        for (k, (a, z)) in segs.iter().enumerate() {
-            let on = b & (1 << k) != 0;
-            if on {
-                p.line_segment([*a, *z], Stroke::new(th * 2.2, SEG_ON.gamma_multiply(0.18)));
-            }
-            p.line_segment([*a, *z], Stroke::new(th, if on { SEG_ON } else { SEG_OFF }));
-        }
-        let dp = pt(1.0, 1.0) + vec2(gap * 0.5, 0.0);
-        p.circle_filled(dp, th * 0.7, if dot { SEG_ON } else { SEG_OFF });
+/// Link button centred on `c`: two chain links, filled with the section's
+/// colour when the pair is linked.
+fn link_button(ui: &Ui, g: Geo, c: Pos2, id: Id, linked: bool, accent: Color32) -> Response {
+    let s = g.s;
+    let rad = 9.0 * s;
+    let r = ui.interact(
+        Rect::from_center_size(c, vec2(rad, rad) * 2.0),
+        id,
+        Sense::click(),
+    );
+    let p = ui.painter();
+    let mut body = if linked { accent } else { CONTROL };
+    if r.hovered() {
+        body = lerp(body, Color32::WHITE, 0.12);
     }
+    p.circle_filled(c, rad, body);
+    p.circle_stroke(c, rad, Stroke::new(1.0, CONTROL_EDGE));
+    let ink = if linked { INSET } else { DIM };
+    for dx in [-2.6, 2.6] {
+        let link = Rect::from_center_size(c + vec2(dx, 0.0) * s, vec2(7.5, 4.6) * s);
+        p.rect_stroke(link, 2.3 * s, Stroke::new(1.4 * s, ink), StrokeKind::Middle);
+    }
+    r
 }
 
 // ---------------------------------------------------------------- the desk
@@ -626,7 +524,7 @@ enum Act {
 }
 
 impl Panel {
-    /// Draws the whole desk in the space left in `ui`.
+    /// Draws the whole console in the space left in `ui`.
     pub(crate) fn desk(&mut self, ui: &mut Ui) {
         let avail = ui.available_rect_before_wrap();
         ui.allocate_rect(avail, Sense::hover());
@@ -636,64 +534,109 @@ impl Panel {
         let g = Geo { o, s };
         let base = ui.scope_id().with("desk");
         let p = ui.painter().clone();
-        plate(&p, g.r(0.0, 0.0, w, h), s);
+        let whole = g.r(0.0, 0.0, w, h);
+        p.rect_filled(whole, 12.0 * s, SURFACE_BOTTOM);
+        vgrad(&p, whole.shrink(6.0 * s), SURFACE_TOP, SURFACE_BOTTOM);
+
+        let mut acts = Vec::new();
+        self.header(ui, g, w, base, &mut acts);
 
         let total: usize = SECTIONS.iter().map(|b| b.channels() as usize).sum();
         self.holds.resize(total, Hold::default());
-
         let daemon_meters = self.using_daemon() && self.daemon_connected;
-        let mut acts = Vec::new();
-        let strips_top = MARGIN + HEADER_H;
         let mut left = MARGIN;
         let mut global = 0;
         for bus in SECTIONS {
             let n = bus.channels() as usize;
             let i = bus.index() as usize;
-            let width = n as f32 * STRIP_W;
-            // Header and rule.
+            let accent = theme::section_color(bus);
+            let width = n as f32 * STRIP_W + 2.0 * PAD;
+            let card = g.r(left, CARD_TOP, width, CARD_H);
+            p.rect_filled(card, 10.0 * s, CARD);
+            p.rect_stroke(card, 10.0 * s, Stroke::new(1.0, BORDER), StrokeKind::Inside);
+            p.rect_filled(g.r(left + 10.0, CARD_TOP + 8.0, 3.0, 11.0), 1.5 * s, accent);
             let title = match bus {
                 Bus::Input => "INPUT MONITOR",
                 Bus::Output => "OUTPUT MONITOR",
                 Bus::MonitorOut => "MONITOR OUT",
             };
             p.text(
-                g.p(left + width / 2.0, MARGIN + 13.0),
-                Align2::CENTER_CENTER,
+                g.p(left + 18.0, CARD_TOP + 13.5),
+                Align2::LEFT_CENTER,
                 title,
-                g.font(11.5),
-                LEGEND,
+                g.font(9.5),
+                TEXT,
             );
-            p.hline(
-                g.p(left + 4.0, 0.0).x..=g.p(left + width - 4.0, 0.0).x,
-                g.p(0.0, MARGIN + 26.0).y,
-                Stroke::new(1.5 * s, RULE),
-            );
-            // Strip dividers.
-            for k in 1..n {
-                let x = left + k as f32 * STRIP_W;
-                p.vline(
-                    g.p(x, 0.0).x,
-                    g.p(0.0, strips_top).y..=g.p(0.0, strips_top + STRIP_H).y,
-                    Stroke::new(1.0, Color32::from_white_alpha(22)),
-                );
+            if bus == Bus::Output {
+                for (k, (label, on, hover)) in [
+                    ("ALL TO MAIN", true, "Send every output to MONITOR OUT"),
+                    ("NONE", false, "Keep every output out of MONITOR OUT"),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let (bx, bw) = if k == 0 {
+                        (left + width - 118.0, 66.0)
+                    } else {
+                        (left + width - 48.0, 40.0)
+                    };
+                    if button(
+                        ui,
+                        g,
+                        g.r(bx, CARD_TOP + 6.0, bw, 15.0),
+                        base.with(("main", k)),
+                        label,
+                        None,
+                        true,
+                    )
+                    .on_hover_text(hover)
+                    .clicked()
+                    {
+                        acts.push(Act::Main(on));
+                    }
+                }
             }
 
+            let top = CARD_TOP + TITLE_H;
+            let x0 = left + PAD;
             for ch in 0..n {
                 let st = self.mixer.strips[i][ch];
-                let cx = left + ch as f32 * STRIP_W + STRIP_W / 2.0;
+                let cx = x0 + ch as f32 * STRIP_W + STRIP_W / 2.0;
                 let id = base.with((i, ch));
-                let mute_hover = match bus {
-                    Bus::Output => "M: take this output out of MONITOR OUT",
-                    _ => "M: mute this channel in the monitor mix",
+                if ch > 0 {
+                    p.vline(
+                        g.p(x0 + ch as f32 * STRIP_W, 0.0).x,
+                        g.p(0.0, top + 2.0).y..=g.p(0.0, top + STRIP_H - 4.0).y,
+                        Stroke::new(1.0, Color32::from_white_alpha(8)),
+                    );
+                }
+                // Channel tab.
+                let name = match bus {
+                    Bus::MonitorOut => ["L", "R"][ch.min(1)].to_string(),
+                    _ => format!("{}", ch + 1),
                 };
-                if key(
+                let tab = g.r(cx - 14.0, top, 28.0, 15.0);
+                p.rect_filled(tab, 4.0 * s, accent.gamma_multiply(0.2));
+                p.text(
+                    tab.center(),
+                    Align2::CENTER_CENTER,
+                    name,
+                    g.font(9.5),
+                    accent,
+                );
+
+                let mute_hover = match bus {
+                    Bus::Output => "MUTE: take this output out of MONITOR OUT",
+                    _ => "MUTE: silence this channel in the monitor mix",
+                };
+                if pill(
                     ui,
-                    g.r(cx - 10.0, strips_top + 6.0, 20.0, 18.0),
+                    g,
+                    g.r(cx - 19.0, top + 21.0, 38.0, 15.0),
                     id.with("m"),
-                    "M",
-                    (!st.on).then_some(MUTE_LIT),
+                    "MUTE",
+                    (!st.on).then_some(MUTE_LED),
                     true,
-                    s,
                 )
                 .on_hover_text(mute_hover)
                 .clicked()
@@ -701,47 +644,39 @@ impl Panel {
                     acts.push(Act::On(bus, ch, !st.on));
                 }
                 if bus != Bus::MonitorOut {
-                    key(
+                    pill(
                         ui,
-                        g.r(cx - 10.0, strips_top + 30.0, 20.0, 18.0),
+                        g,
+                        g.r(cx - 19.0, top + 40.0, 38.0, 15.0),
                         id.with("s"),
-                        "S",
+                        "SOLO",
                         None,
                         false,
-                        s,
                     )
                     .on_hover_text("SOLO: its address on the unit is not identified yet");
                     let mut pan = st.pan;
-                    knob(ui, g, g.p(cx, strips_top + 68.0), id.with("pan"), &mut pan)
+                    let label = match pan {
+                        0 => "C".to_string(),
+                        v if v < 0 => format!("L{}", -v),
+                        v => format!("R{v}"),
+                    };
+                    pan_bar(ui, g, g.p(cx, top + 66.0), id.with("pan"), &mut pan, accent)
                         .on_hover_text(format!(
-                            "PAN {}: drag, scroll, double-click to centre",
-                            match pan {
-                                0 => "C".to_string(),
-                                v if v < 0 => format!("L{}", -v),
-                                v => format!("R{v}"),
-                            }
+                            "PAN {label}: drag sideways, scroll, double-click to centre"
                         ));
+                    p.text(
+                        g.p(cx, top + 79.0),
+                        Align2::CENTER_CENTER,
+                        label,
+                        g.mono(7.5),
+                        DIM,
+                    );
                     if pan != st.pan {
                         acts.push(Act::Pan(bus, ch, pan));
                     }
                 }
-                let mut db = st.volume_db;
-                fader(
-                    ui,
-                    g,
-                    cx - 4.0,
-                    strips_top + FADER_TOP,
-                    id.with("fader"),
-                    bus,
-                    &mut db,
-                )
-                .on_hover_text(format!(
-                    "VOLUME {} dB: drag the cap, scroll, double-click for 0 dB",
-                    format_db(db)
-                ));
-                if (db - st.volume_db).abs() > f32::EPSILON {
-                    acts.push(Act::Volume(bus, ch, db));
-                }
+
+                let ftop = top + FADER_TOP;
                 let level = match bus {
                     Bus::Input if daemon_meters => Some(self.levels_in.get(ch).copied()),
                     Bus::Output if daemon_meters => Some(self.levels_out.get(ch).copied()),
@@ -749,247 +684,237 @@ impl Panel {
                     _ => None,
                 }
                 .map(|l| l.unwrap_or(0.0));
-                meter(
-                    ui,
-                    g,
-                    cx + 9.0,
-                    strips_top + FADER_TOP,
-                    level,
-                    &mut self.holds[global + ch],
+                ladder(ui, g, cx - 17.0, ftop, level, &mut self.holds[global + ch]);
+                let mut db = st.volume_db;
+                fader(ui, g, cx - 2.0, ftop, id.with("fader"), accent, &mut db).on_hover_text(
+                    format!(
+                        "VOLUME {} dB: drag the cap, scroll, double-click for 0 dB",
+                        format_db(db)
+                    ),
                 );
-                let name = match bus {
-                    Bus::MonitorOut => ["L", "R"][ch.min(1)].to_string(),
-                    _ => format!("{}", ch + 1),
-                };
+                if (db - st.volume_db).abs() > f32::EPSILON {
+                    acts.push(Act::Volume(bus, ch, db));
+                }
+                let readout = g.r(cx - 17.0, ftop + FADER_H + 12.0, 34.0, 14.0);
+                p.rect_filled(readout, 3.0 * s, INSET);
                 p.text(
-                    g.p(cx, strips_top + STRIP_H - 10.0),
+                    readout.center(),
                     Align2::CENTER_CENTER,
-                    name,
-                    g.font(11.0),
-                    LEGEND,
+                    format_db(db),
+                    g.mono(8.0),
+                    if db > 0.05 { WARN } else { TEXT },
                 );
             }
-            for (pair, &linked) in self.mixer.links[i].iter().take(n / 2).enumerate() {
-                let x = left + pair as f32 * 2.0 * STRIP_W;
-                if key(
-                    ui,
-                    g.r(
-                        x + 5.0,
-                        strips_top + FADER_TOP + FADER_H + 20.0,
-                        2.0 * STRIP_W - 10.0,
-                        17.0,
-                    ),
-                    base.with((i, "link", pair)),
-                    "LINK",
-                    linked.then_some(LINK_LIT),
-                    true,
-                    s,
-                )
-                .on_hover_text("Stereo link: fader and M move both channels of the pair")
-                .clicked()
+            for pair in 0..n / 2 {
+                let linked = self.mixer.links[i].get(pair).copied().unwrap_or(false);
+                let c = g.p(
+                    x0 + (2 * pair + 1) as f32 * STRIP_W,
+                    top + FADER_TOP + FADER_H + 40.0,
+                );
+                if link_button(ui, g, c, base.with((i, "link", pair)), linked, accent)
+                    .on_hover_text("Stereo link: fader and MUTE move both channels of the pair")
+                    .clicked()
                 {
                     acts.push(Act::Link(bus, pair));
                 }
             }
-            left += width + GAP;
+            left += width + SECTION_GAP;
             global += n;
         }
-
-        // Master section.
-        let mx = left;
-        p.vline(
-            g.p(mx - GAP / 2.0, 0.0).x,
-            g.p(0.0, MARGIN).y..=g.p(0.0, strips_top + STRIP_H).y,
-            Stroke::new(1.5 * s, RULE),
-        );
-        self.master(ui, g, mx, base, &mut acts);
 
         for a in acts {
             self.apply_act(a);
         }
     }
 
-    fn master(&mut self, ui: &mut Ui, g: Geo, mx: f32, base: Id, acts: &mut Vec<Act>) {
+    /// The header bar: name, sample rate, front-panel LEDs, connection
+    /// status and the device buttons.
+    fn header(&mut self, ui: &mut Ui, g: Geo, w: f32, base: Id, acts: &mut Vec<Act>) {
         let s = g.s;
         let p = ui.painter().clone();
-        let cx = mx + MASTER_W / 2.0;
-        let top = MARGIN;
-        ui.put(
-            g.r(mx, top, MASTER_W, 26.0),
-            egui::Label::new(
-                RichText::new("UA-101")
-                    .italics()
-                    .size(21.0 * s)
-                    .color(LEGEND),
-            ),
+        let bar = g.r(MARGIN, MARGIN, w - 2.0 * MARGIN, HEADER_H);
+        p.rect_filled(bar, 10.0 * s, CARD);
+        p.rect_stroke(bar, 10.0 * s, Stroke::new(1.0, BORDER), StrokeKind::Inside);
+        let cy = MARGIN + HEADER_H / 2.0;
+        let x0 = MARGIN + 16.0;
+
+        p.text(
+            g.p(x0, cy - 6.0),
+            Align2::LEFT_CENTER,
+            "UA-101",
+            g.font(19.0),
+            TEXT,
         );
-        ui.put(
-            g.r(mx, top + 24.0, MASTER_W, 16.0),
-            egui::Label::new(
-                RichText::new("Control Panel")
-                    .italics()
-                    .size(11.5 * s)
-                    .color(LEGEND_DIM),
-            ),
+        p.text(
+            g.p(x0 + 1.0, cy + 12.0),
+            Align2::LEFT_CENTER,
+            "CONTROL PANEL",
+            g.font(7.5),
+            DIM,
         );
 
-        // Sample rate.
+        // Sample rate on an LCD.
         let rate = self
             .daemon_rate
             .filter(|_| self.using_daemon())
             .or_else(|| self.device.as_ref().map(|d| d.sample_rate()));
+        let lx = x0 + 104.0;
+        p.text(
+            g.p(lx, cy - 17.0),
+            Align2::LEFT_CENTER,
+            "SAMPLE RATE",
+            g.font(6.5),
+            DIM,
+        );
+        let lcd = g.r(lx, cy - 11.0, 92.0, 26.0);
+        p.rect_filled(lcd, 4.0 * s, LCD_BG);
+        p.rect_stroke(lcd, 4.0 * s, Stroke::new(1.0, LCD_EDGE), StrokeKind::Inside);
         let text = rate
             .map(|r| format!("{:.1}", r as f64 / 1000.0))
             .unwrap_or_else(|| "--.-".into());
-        let screen = g.r(cx - 52.0, top + 48.0, 104.0, 44.0);
-        p.rect_filled(
-            screen.expand(2.0 * s),
-            4.0 * s,
-            Color32::from_rgb(0x30, 0x33, 0x3c),
-        );
-        p.rect_filled(screen, 3.0 * s, Color32::from_rgb(0x0d, 0x05, 0x06));
-        seven_seg(&p, screen, &text);
-        ui.interact(screen, base.with("rate"), Sense::hover())
-            .on_hover_text("Sample rate, set by the switch on the unit's rear panel");
         p.text(
-            g.p(cx, top + 102.0),
-            Align2::CENTER_CENTER,
-            "kHz",
-            g.font(10.5),
-            LEGEND,
+            g.p(lx + 56.0, cy + 2.0),
+            Align2::RIGHT_CENTER,
+            text,
+            g.mono(15.0),
+            LCD_FG,
         );
+        p.text(
+            g.p(lx + 60.0, cy + 4.0),
+            Align2::LEFT_CENTER,
+            "kHz",
+            g.font(8.0),
+            LCD_FG.gamma_multiply(0.7),
+        );
+        ui.interact(lcd, base.with("rate"), Sense::hover())
+            .on_hover_text("Set by the sample rate switch on the unit's rear panel");
 
-        let heading = |y: f32, t: &str| {
-            p.text(
-                g.p(cx, top + y),
-                Align2::CENTER_CENTER,
-                t,
-                g.font(10.5),
-                LEGEND,
-            );
-        };
-        let caption = |x: f32, y: f32, t: &str| {
-            p.text(
-                g.p(x, top + y),
-                Align2::CENTER_CENTER,
-                t,
-                g.font(8.5),
-                LEGEND,
-            );
-        };
+        // Front-panel state, read from the unit.
         let unknown = "Unknown until the switch moves: the unit reports changes only";
-
-        heading(128.0, "CLOCK");
         let clock = self.front.clock.map(|c| c == 0);
-        for (k, (label, state)) in [("INT", clock), ("DIGITAL", clock.map(|c| !c))]
-            .into_iter()
-            .enumerate()
-        {
-            let x = cx - 28.0 + k as f32 * 56.0;
-            let r = lamp(
-                ui,
-                g.r(x - 11.0, top + 140.0, 22.0, 16.0),
-                base.with(("clock", k)),
-                state,
-                s,
-            );
-            if state.is_none() {
-                r.on_hover_text(unknown);
-            }
-            caption(x, 166.0, label);
-        }
-
-        heading(190.0, "DIRECT MONITOR");
         let soft_hover = if self.front.soft_ctrl == Some(false) {
             "SOFT CTRL is off: the unit ignores the monitor mixer from the computer"
         } else {
             "SOFT CTRL: the direct monitor follows the INPUT MONITOR mixer"
         };
-        for (k, (label, state, hover)) in [
-            ("MONO", self.front.mono, "MONO: the direct monitor in mono"),
-            ("SOFT", self.front.soft_ctrl, soft_hover),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let x = cx - 28.0 + k as f32 * 56.0;
-            lamp(
-                ui,
-                g.r(x - 11.0, top + 202.0, 22.0, 16.0),
-                base.with(("dm", k)),
-                state,
-                s,
-            )
-            .on_hover_text(if state.is_none() { unknown } else { hover });
-            caption(x, 228.0, label);
-        }
-
-        heading(252.0, "WAVE TO MAIN");
-        for (k, (label, on, hover)) in [
-            ("ALL", true, "Send every output to MONITOR OUT"),
-            ("NONE", false, "Keep every output out of MONITOR OUT"),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let x = cx - 28.0 + k as f32 * 56.0;
-            if key(
-                ui,
-                g.r(x - 20.0, top + 264.0, 40.0, 17.0),
-                base.with(("main", k)),
-                label,
-                None,
-                true,
-                s,
-            )
-            .on_hover_text(hover)
-            .clicked()
-            {
-                acts.push(Act::Main(on));
-            }
-        }
-
-        let (status, color) = if self.using_daemon() {
-            if self.daemon_connected {
-                ("UA101D · CONNECTED", OK)
-            } else {
-                ("UA101D · NO DEVICE", WARN)
-            }
-        } else if self.link.is_some() {
-            ("CONNECTED", OK)
-        } else if self.device.is_some() {
-            ("NOT CONNECTED", WARN)
-        } else {
-            ("NO DEVICE", BAD)
-        };
-        p.text(
-            g.p(cx, top + 304.0),
-            Align2::CENTER_CENTER,
-            status,
-            g.font(9.0),
-            color,
-        );
-        if self.meters.is_some() {
+        let groups: [LedGroup; 2] = [
+            (
+                "CLOCK",
+                lx + 112.0,
+                [
+                    ("INT", clock, OK, "Internal clock"),
+                    (
+                        "DIGITAL",
+                        clock.map(|c| !c),
+                        WARN,
+                        "Clock from the digital input",
+                    ),
+                ],
+            ),
+            (
+                "DIRECT MONITOR",
+                lx + 222.0,
+                [
+                    (
+                        "MONO",
+                        self.front.mono,
+                        WARN,
+                        "MONO: the direct monitor in mono",
+                    ),
+                    ("SOFT CTRL", self.front.soft_ctrl, OK, soft_hover),
+                ],
+            ),
+        ];
+        for (title, gx, items) in groups {
             p.text(
-                g.p(cx, top + 318.0),
-                Align2::CENTER_CENTER,
-                "SIGNAL METERS ON",
-                g.font(8.0),
-                LEGEND_DIM,
+                g.p(gx, cy - 17.0),
+                Align2::LEFT_CENTER,
+                title,
+                g.font(6.5),
+                DIM,
             );
+            let mut x = gx;
+            for (k, (label, state, color, hover)) in items.into_iter().enumerate() {
+                let c = g.p(x + 4.0, cy + 2.0);
+                led(&p, c, 3.6 * s, (state == Some(true)).then_some(color));
+                let t = p.text(
+                    g.p(x + 11.0, cy + 2.0),
+                    Align2::LEFT_CENTER,
+                    label,
+                    g.font(8.0),
+                    if state.is_some() { TEXT } else { DIM },
+                );
+                ui.interact(
+                    Rect::from_min_max(g.p(x, cy - 6.0), pos2(t.right(), g.p(0.0, cy + 10.0).y)),
+                    base.with((title, k)),
+                    Sense::hover(),
+                )
+                .on_hover_text(if state.is_none() { unknown } else { hover });
+                x += (t.width() / s) + 24.0;
+            }
         }
 
-        let button = |y: f32| g.r(cx - 58.0, top + y, 116.0, 22.0);
-        if !self.using_daemon() {
+        // Right side, from the right edge: DEVICE, MEMORY, PATCH BAY,
+        // CONNECT, then the status.
+        let mut rx = w - MARGIN - 12.0;
+        let mut place = |width: f32| {
+            rx -= width;
+            let r = g.r(rx, cy - 11.0, width, 22.0);
+            rx -= 8.0;
+            r
+        };
+        let device_rect = place(70.0);
+        let memory_rect = place(70.0);
+        let patch_rect = place(84.0);
+        let connect_rect = (!self.using_daemon()).then(|| place(90.0));
+        let status_right = rx;
+
+        let device = button(
+            ui,
+            g,
+            device_rect,
+            base.with("device"),
+            "DEVICE",
+            None,
+            true,
+        );
+        egui::Popup::menu(&device).show(|ui| self.device_menu(ui));
+        if button(
+            ui,
+            g,
+            memory_rect,
+            base.with("memory"),
+            "MEMORY",
+            None,
+            true,
+        )
+        .clicked()
+        {
+            self.dialogs.memory = true;
+        }
+        if button(
+            ui,
+            g,
+            patch_rect,
+            base.with("patch"),
+            "PATCH BAY",
+            None,
+            true,
+        )
+        .clicked()
+        {
+            self.dialogs.patch_bay = true;
+        }
+        if let Some(rect) = connect_rect {
             let connected = self.link.is_some();
-            let r = key(
+            let r = button(
                 ui,
-                button(334.0),
+                g,
+                rect,
                 base.with("connect"),
                 if connected { "DISCONNECT" } else { "CONNECT" },
-                connected.then_some(LINK_LIT),
+                (!connected).then_some(theme::BLUE),
                 self.device.is_some(),
-                s,
             )
             .on_hover_text(
                 "Takes the MIDI interface. On Linux this detaches snd-ua101 \
@@ -1003,42 +928,53 @@ impl Panel {
                 });
             }
         }
-        if key(
-            ui,
-            button(364.0),
-            base.with("patch"),
-            "PATCH BAY",
-            None,
-            true,
-            s,
-        )
-        .clicked()
-        {
-            self.dialogs.patch_bay = true;
-        }
-        if key(
-            ui,
-            button(394.0),
-            base.with("memory"),
-            "MEMORY",
-            None,
-            true,
-            s,
-        )
-        .clicked()
-        {
-            self.dialogs.memory = true;
-        }
-        let device = key(
-            ui,
-            button(424.0),
-            base.with("device"),
-            "DEVICE",
-            None,
-            true,
-            s,
+
+        let (status, color) = if self.using_daemon() {
+            if self.daemon_connected {
+                ("UA101D", OK)
+            } else {
+                ("UA101D · NO DEVICE", WARN)
+            }
+        } else if self.link.is_some() {
+            ("CONNECTED", OK)
+        } else if self.device.is_some() {
+            ("OFFLINE", DIM)
+        } else {
+            ("NO DEVICE", BAD)
+        };
+        let galley = p.layout_no_wrap(status.into(), g.font(8.0), color);
+        let pw = galley.size().x / s + 26.0;
+        let pill_rect = g.r(status_right - pw - 4.0, cy - 9.0, pw, 18.0);
+        p.rect_filled(pill_rect, 9.0 * s, color.gamma_multiply(0.14));
+        p.rect_stroke(
+            pill_rect,
+            9.0 * s,
+            Stroke::new(1.0, color.gamma_multiply(0.6)),
+            StrokeKind::Inside,
         );
-        egui::Popup::menu(&device).show(|ui| self.device_menu(ui));
+        led(
+            &p,
+            pos2(pill_rect.left() + 10.0 * s, pill_rect.center().y),
+            3.0 * s,
+            Some(color),
+        );
+        p.galley(
+            pos2(
+                pill_rect.left() + 17.0 * s,
+                pill_rect.center().y - galley.size().y / 2.0,
+            ),
+            galley,
+            color,
+        );
+        if self.meters.is_some() {
+            p.text(
+                pos2(pill_rect.center().x, pill_rect.bottom() + 6.0 * s),
+                Align2::CENTER_CENTER,
+                "SIGNAL METERS",
+                g.font(6.0),
+                DIM,
+            );
+        }
     }
 
     fn device_menu(&mut self, ui: &mut Ui) {
@@ -1177,8 +1113,10 @@ mod tests {
     }
 
     #[test]
-    fn meter_colours_span_the_scale() {
-        assert_eq!(meter_color(0.0), METER[0].1);
-        assert_eq!(meter_color(1.0), METER[2].1);
+    fn ladder_colours_follow_the_level() {
+        assert_eq!(segment_color(0), METER_LOW);
+        assert_eq!(segment_color(LADDER - 1), METER_HIGH);
+        assert_eq!(level_frac(1.0), 1.0);
+        assert_eq!(level_frac(0.0), 0.0);
     }
 }
