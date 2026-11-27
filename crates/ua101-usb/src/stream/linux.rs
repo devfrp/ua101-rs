@@ -177,6 +177,11 @@ impl Engine {
     }
 
     pub(crate) fn run(mut self) -> Result<()> {
+        // SAFETY: gettid has no preconditions.
+        let tid = unsafe { libc::gettid() };
+        self.counters
+            .engine_tid
+            .store(tid as u64, std::sync::atomic::Ordering::Release);
         let result = self.stream_loop();
         if let Err(e) = &result {
             warn!("stream stopped: {e}");

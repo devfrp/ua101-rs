@@ -89,9 +89,19 @@ ua101d                        # or: systemctl --user enable --now ua101d
 ```
 
 While `ua101d` runs, `ua101-panel` connects to it automatically (status
-`UA101D` in the header) and the card stays available to the system. The
-control socket is `$XDG_RUNTIME_DIR/ua101d.sock`; its line protocol is
+`UA101D` in the master section) and the card stays available to the system.
+The control socket is `$XDG_RUNTIME_DIR/ua101d.sock`; its line protocol is
 documented in `crates/ua101d/src/control.rs`.
+
+`ua101d` asks RealtimeKit (`rtkit-daemon`, the service PipeWire uses) for
+real-time priority on its audio threads. Without it, audio crackles as soon
+as the CPU is busy. The log says `real-time priority 20 (SCHED_RR)` for each
+thread when it works, and reports any glitch once a second
+(`audio glitches in the last second: …`):
+
+```sh
+journalctl --user -u ua101d -f
+```
 
 ### Patch bay
 

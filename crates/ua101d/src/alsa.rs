@@ -148,6 +148,8 @@ pub struct Pcm {
     file: File,
     direction: Direction,
     config: Config,
+    /// Over/underruns recovered so far.
+    xruns: std::cell::Cell<u64>,
 }
 
 impl Pcm {
@@ -175,6 +177,7 @@ impl Pcm {
             file,
             direction,
             config: want,
+            xruns: std::cell::Cell::new(0),
         };
         pcm.ioctl(IOCTL_HW_PARAMS, (&mut hw as *mut HwParams).cast())
             .map_err(|e| io::Error::new(e.kind(), format!("{path}: hw_params: {e}")))?;
@@ -190,6 +193,11 @@ impl Pcm {
 
     pub fn config(&self) -> Config {
         self.config
+    }
+
+    /// Over/underruns recovered since the device was opened.
+    pub fn xruns(&self) -> u64 {
+        self.xruns.get()
     }
 
     fn ioctl(&self, request: u32, arg: *mut c_void) -> io::Result<i32> {
@@ -223,6 +231,7 @@ impl Pcm {
                 Ok(_) => return Ok(x.result as usize),
                 Err(e) if matches!(e.raw_os_error(), Some(libc::EPIPE | libc::ESTRPIPE)) => {
                     log::debug!("{:?} xrun, re-preparing", self.direction);
+                    self.xruns.set(self.xruns.get() + 1);
                     self.prepare()?;
                 }
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}

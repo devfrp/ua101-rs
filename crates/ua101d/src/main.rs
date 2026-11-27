@@ -14,6 +14,8 @@ mod bridge;
 mod control;
 #[cfg(target_os = "linux")]
 mod daemon;
+#[cfg(target_os = "linux")]
+mod rtkit;
 
 fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();

@@ -9,7 +9,7 @@
 use std::{
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -39,10 +39,28 @@ fn accumulate_peaks(peaks: &mut Vec<f32>, samples: &[i32], channels: usize) {
     }
 }
 
+/// Glitch counters of one pump, read by the daemon to report them.
+#[derive(Default)]
+pub struct PumpStats {
+    /// ALSA over/underruns on the loopback side.
+    pub xruns: AtomicU64,
+    /// Frames dropped to follow the device clock.
+    pub drops: AtomicU64,
+    /// Frames repeated to follow the device clock.
+    pub repeats: AtomicU64,
+}
+
+impl PumpStats {
+    fn bump(c: &AtomicU64) {
+        c.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 pub struct PumpConfig {
     pub period: usize,
     /// Target fill of the USB ring, in periods.
     pub target_periods: usize,
+    pub stats: Arc<PumpStats>,
 }
 
 /// Applications → loopback → UA-101 outputs.
@@ -74,6 +92,7 @@ pub fn to_device(
             }
             Err(e) => return Err(e),
         };
+        cfg.stats.xruns.store(pcm.xruns(), Ordering::Relaxed);
         let mut n = frames * channels;
         for s in &mut buf[..n] {
             *s >>= 8; // S32_LE from applications → 24-bit
@@ -84,8 +103,12 @@ pub fn to_device(
         let fill = (capacity - tx.slots()) / channels;
         if fill > target + band && n >= channels {
             n -= channels; // device clock slower: drop one frame
+            PumpStats::bump(&cfg.stats.drops);
         }
         let repeat = fill + frames < target.saturating_sub(band) && n >= channels;
+        if repeat {
+            PumpStats::bump(&cfg.stats.repeats);
+        }
         for &s in &buf[..n] {
             if tx.push(s).is_err() {
                 break;
@@ -129,8 +152,10 @@ pub fn from_device(
             continue;
         }
         let (take, out) = if fill > target + band {
+            PumpStats::bump(&cfg.stats.drops);
             (cfg.period + 1, cfg.period) // drop one frame
         } else if fill < target.saturating_sub(band) {
+            PumpStats::bump(&cfg.stats.repeats);
             (cfg.period - 1, cfg.period) // repeat one frame
         } else {
             (cfg.period, cfg.period)
@@ -156,7 +181,9 @@ pub fn from_device(
         for s in &mut buf[..m] {
             *s <<= 8; // 24-bit → S32_LE for applications
         }
-        if let Err(e) = pcm.write(&buf[..m]) {
+        let written = pcm.write(&buf[..m]);
+        cfg.stats.xruns.store(pcm.xruns(), Ordering::Relaxed);
+        if let Err(e) = written {
             if is_peer_mismatch(&e) {
                 wait_for_peer(&pcm, &stop, "from-device");
             } else {

@@ -134,6 +134,8 @@ pub(crate) struct Counters {
     pub capture_overruns: AtomicU64,
     pub playback_underruns: AtomicU64,
     pub packet_errors: AtomicU64,
+    /// Kernel thread id of the streaming thread, 0 until it runs.
+    pub engine_tid: AtomicU64,
 }
 
 /// Snapshot of the stream counters.
@@ -274,6 +276,15 @@ impl StreamControl {
 
     pub fn is_running(&self) -> bool {
         self.thread.as_ref().is_some_and(|t| !t.is_finished())
+    }
+
+    /// Kernel thread id of the streaming thread, once it runs. Lets the
+    /// caller raise its scheduling priority (e.g. through RealtimeKit).
+    pub fn engine_thread_id(&self) -> Option<u64> {
+        match self.counters.engine_tid.load(Ordering::Acquire) {
+            0 => None,
+            tid => Some(tid),
+        }
     }
 
     /// Stops the stream and returns the final counters, or the error that

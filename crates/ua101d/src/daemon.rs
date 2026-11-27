@@ -26,8 +26,9 @@ use ua101_usb::{
 
 use crate::{
     alsa::{self, Config, Direction, Pcm},
-    bridge::{self, Levels, PumpConfig, SharedLevels},
+    bridge::{self, Levels, PumpConfig, PumpStats, SharedLevels},
     control::{self, Clients, PatchCommand, Request, State},
+    rtkit,
 };
 
 #[derive(Parser, Debug)]
@@ -251,11 +252,27 @@ fn idle(shared: &mut Shared, duration: Duration) {
     }
 }
 
+/// Gives the USB streaming thread real-time priority once it runs.
+fn promote_engine(ctl: &ua101_usb::StreamControl) {
+    for _ in 0..50 {
+        if let Some(tid) = ctl.engine_thread_id() {
+            rtkit::promote("ua101-stream", tid);
+            return;
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+    warn!("ua101-stream: thread id unknown, left at normal priority");
+}
+
 fn spawn_pump<F>(name: &str, f: F) -> Result<JoinHandle<std::io::Result<()>>>
 where
     F: FnOnce() -> std::io::Result<()> + Send + 'static,
 {
-    Ok(thread::Builder::new().name(name.into()).spawn(f)?)
+    let label = name.to_string();
+    Ok(thread::Builder::new().name(name.into()).spawn(move || {
+        rtkit::promote(&label, rtkit::current_tid());
+        f()
+    })?)
 }
 
 fn session(args: &Args, shared: &mut Shared) -> Result<()> {
@@ -277,6 +294,7 @@ fn session(args: &Args, shared: &mut Shared) -> Result<()> {
         })
         .context("cannot start USB streaming")?;
     let (ctl, cap_rx, play_tx) = stream.split();
+    promote_engine(&ctl);
     let play = *ctl.playback_format();
     let capt = *ctl.capture_format();
     let rate = capt.sample_rate;
@@ -325,8 +343,10 @@ fn session(args: &Args, shared: &mut Shared) -> Result<()> {
     }
 
     let stop = Arc::new(AtomicBool::new(false));
+    let to_stats = Arc::new(PumpStats::default());
+    let from_stats = Arc::new(PumpStats::default());
     let to_thread = {
-        let (stop, levels) = (stop.clone(), shared.levels.clone());
+        let (stop, levels, stats) = (stop.clone(), shared.levels.clone(), to_stats.clone());
         spawn_pump("ua101d-to-device", move || {
             bridge::to_device(
                 to_pcm,
@@ -336,12 +356,13 @@ fn session(args: &Args, shared: &mut Shared) -> Result<()> {
                 PumpConfig {
                     period,
                     target_periods: 4,
+                    stats,
                 },
             )
         })?
     };
     let from_thread = {
-        let (stop, levels) = (stop.clone(), shared.levels.clone());
+        let (stop, levels, stats) = (stop.clone(), shared.levels.clone(), from_stats.clone());
         spawn_pump("ua101d-from-device", move || {
             bridge::from_device(
                 from_pcm,
@@ -351,6 +372,7 @@ fn session(args: &Args, shared: &mut Shared) -> Result<()> {
                 PumpConfig {
                     period,
                     target_periods: 4,
+                    stats,
                 },
             )
         })?
@@ -366,8 +388,18 @@ fn session(args: &Args, shared: &mut Shared) -> Result<()> {
     ));
 
     let mut last_levels = Instant::now();
+    let mut glitches = Glitches::default();
+    let mut last_glitch_check = Instant::now();
     let mut result = Ok(());
     while !STOP.load(Ordering::SeqCst) {
+        if last_glitch_check.elapsed() >= Duration::from_secs(1) {
+            last_glitch_check = Instant::now();
+            let now = Glitches::read(&ctl.stats(), &to_stats, &from_stats);
+            if let Some(report) = now.since(&glitches) {
+                warn!("audio glitches in the last second: {report}");
+            }
+            glitches = now;
+        }
         if !ctl.is_running() {
             result = Err(anyhow!("USB stream stopped (unit disconnected?)"));
             break;
@@ -474,4 +506,92 @@ fn session(args: &Args, shared: &mut Shared) -> Result<()> {
         Err(e) => warn!("USB stream: {e}"),
     }
     result
+}
+
+/// Glitch counters of the whole audio path, to report what changed.
+#[derive(Default, Clone, Copy, PartialEq)]
+struct Glitches {
+    usb_underruns: u64,
+    usb_overruns: u64,
+    usb_packet_errors: u64,
+    to_xruns: u64,
+    to_drops: u64,
+    to_repeats: u64,
+    from_xruns: u64,
+    from_drops: u64,
+    from_repeats: u64,
+}
+
+impl Glitches {
+    fn read(usb: &ua101_usb::StreamStats, to: &PumpStats, from: &PumpStats) -> Self {
+        let r = |c: &std::sync::atomic::AtomicU64| c.load(Ordering::Relaxed);
+        Self {
+            usb_underruns: usb.playback_underruns,
+            usb_overruns: usb.capture_overruns,
+            usb_packet_errors: usb.packet_errors,
+            to_xruns: r(&to.xruns),
+            to_drops: r(&to.drops),
+            to_repeats: r(&to.repeats),
+            from_xruns: r(&from.xruns),
+            from_drops: r(&from.drops),
+            from_repeats: r(&from.repeats),
+        }
+    }
+
+    /// What changed since `before`, or `None` when nothing did.
+    fn since(&self, before: &Self) -> Option<String> {
+        let fields = [
+            (
+                "USB playback underrun frames",
+                self.usb_underruns,
+                before.usb_underruns,
+            ),
+            (
+                "USB capture overrun frames",
+                self.usb_overruns,
+                before.usb_overruns,
+            ),
+            (
+                "USB packet errors",
+                self.usb_packet_errors,
+                before.usb_packet_errors,
+            ),
+            ("to-device xruns", self.to_xruns, before.to_xruns),
+            ("to-device drops", self.to_drops, before.to_drops),
+            ("to-device repeats", self.to_repeats, before.to_repeats),
+            ("from-device xruns", self.from_xruns, before.from_xruns),
+            ("from-device drops", self.from_drops, before.from_drops),
+            (
+                "from-device repeats",
+                self.from_repeats,
+                before.from_repeats,
+            ),
+        ];
+        let parts: Vec<String> = fields
+            .iter()
+            .filter(|(_, now, then)| now != then)
+            .map(|(name, now, then)| format!("{name} +{}", now.saturating_sub(*then)))
+            .collect();
+        (!parts.is_empty()).then(|| parts.join(", "))
+    }
+}
+
+#[cfg(test)]
+mod glitch_tests {
+    use super::Glitches;
+
+    #[test]
+    fn reports_only_what_changed() {
+        let before = Glitches::default();
+        assert_eq!(before.since(&before), None);
+        let now = Glitches {
+            to_drops: 3,
+            usb_underruns: 12,
+            ..before
+        };
+        assert_eq!(
+            now.since(&before).as_deref(),
+            Some("USB playback underrun frames +12, to-device drops +3")
+        );
+    }
 }
