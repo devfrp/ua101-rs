@@ -769,8 +769,7 @@ impl Panel {
                     LEGEND,
                 );
             }
-            for pair in 0..n / 2 {
-                let linked = self.mixer.links[i][pair];
+            for (pair, &linked) in self.mixer.links[i].iter().take(n / 2).enumerate() {
                 let x = left + pair as f32 * 2.0 * STRIP_W;
                 if key(
                     ui,
