@@ -9,6 +9,8 @@ checked against the descriptors of a real unit. See [`docs/protocol.md`](docs/pr
 
 Website: <https://devfrp.github.io/ua101-rs/> (source in `site/`).
 
+![The ua101-panel console](docs/img/panel.png)
+
 ## Status
 
 | Feature                          | Linux | macOS | Windows |
@@ -19,11 +21,14 @@ Website: <https://devfrp.github.io/ua101-rs/> (source in `site/`).
 | Audio, 10 outputs / 12 inputs    | ✅ (usbfs) | 🚧 IOKit isoch | 🚧 WinUSB isoch |
 | System audio device (`ua101d` driver daemon) | ✅ PipeWire/ALSA, 10 out / 12 in | 🚧 | 🚧 |
 | Mixer / device panel (Roland SysEx)           | ✅ (addresses partly inferred) | ✅ | ✅ |
+| Level meters (inputs, outputs, MONITOR OUT)   | ✅ (`ua101d`) | 🚧 | 🚧 |
+| Real-time audio threads (RealtimeKit)         | ✅ | – | – |
 | Patch bay with virtual cables (`ua101d`)      | 🧪 | 🚧 | 🚧 |
 
 ✅ implemented · 🧪 implemented, not yet verified on hardware · 🚧 to do. On Linux, playback and 12-channel recording
 through `ua101d` and PipeWire have been verified on a real unit at 44.1 kHz
-(bit-exact levels). The other rate positions and the mixer write addresses
+(bit-exact levels), with no glitch under CPU load since v0.2.0. The other
+rate positions and some mixer addresses (SOLO, the unit's own patch bay)
 are still to be verified (see *Open questions* in `docs/protocol.md`).
 
 ## Installation
@@ -40,10 +45,11 @@ The script:
 - installs the panel's runtime libraries with the distribution's package
   manager (apt, dnf, pacman, zypper, xbps);
 - checks the archive's SHA-256;
-- installs `ua101`, `ua101-panel` and a udev rule that gives access to the
-  card without root.
+- installs `ua101`, `ua101-panel`, the `ua101d` daemon with its user
+  service, the `snd-aloop` settings and a udev rule that gives access to
+  the card without root.
 
-Options: `sh -s -- --cli-only`, `--no-deps`, `--version v0.2.0`,
+Options: `sh -s -- --cli-only`, `--no-deps`, `--version vX.Y.Z`, `--no-daemon`,
 `--prefix ~/.local`, `--blacklist-kernel` (stops the in-kernel `snd-ua101`
 driver from claiming the card), `--uninstall`.
 
@@ -65,7 +71,30 @@ Download `ua101-macos-universal.dmg` (Intel + Apple Silicon) and drag
 time, right-click it and choose *Open*, or run
 `xattr -dr com.apple.quarantine "/Applications/UA-101 Panel.app"`.
 
-For validate version for Mac M1 and later, please refeer to https://github.com/delta90h/ua101-mac; thanks to @deltah90h for his version
+For a driver validated on Apple silicon Macs (M1 and later), see
+[delta90h/ua101-mac](https://github.com/delta90h/ua101-mac). Thanks to
+@delta90h for it.
+
+## The control panel
+
+`ua101-panel` shows the unit's two monitor mixers as one console that
+scales with the window:
+
+- the header bar: sample rate, the CLOCK and DIRECT MONITOR state reported
+  by the unit, the connection status, and the PATCH BAY, MEMORY and DEVICE
+  buttons (DEVICE holds the test tone, the device list, the SysEx console
+  and the other settings);
+- one card per section, INPUT MONITOR (blue), OUTPUT MONITOR (orange) and
+  MONITOR OUT (green). Each strip has MUTE, SOLO (not yet available: its
+  address is unknown), a pan bar, a fader from −∞ to +6 dB with its value
+  below, and an LED meter. A round button between two strips links the
+  pair;
+- ALL TO MAIN and NONE send every output to MONITOR OUT, or none.
+
+Faders and pan respond to drag, the mouse wheel and a double click
+(0 dB, centre). With `ua101d` running, the input and output meters show
+what goes through the daemon, and MONITOR OUT shows the unit's monitor mix,
+which it returns on capture channels 11–12.
 
 ## The driver daemon (Linux)
 
@@ -98,12 +127,18 @@ documented in `crates/ua101d/src/control.rs`.
 `ua101d` asks RealtimeKit (`rtkit-daemon`, the service PipeWire uses) for
 real-time priority on its audio threads. Without it, audio crackles as soon
 as the CPU is busy. The log says `real-time priority 20 (SCHED_RR)` for each
-thread when it works, and reports any glitch once a second
-(`audio glitches in the last second: …`):
+thread when it works, and reports any glitch (xrun, USB error) once a
+second (`audio glitches in the last second: …`):
 
 ```sh
 journalctl --user -u ua101d -f
 ```
+
+The loopback card runs on the system clock and the UA-101 on its own, so
+the two drift apart slowly (about 50 ppm on the unit tested). `ua101d`
+follows the drift on an average over one second and corrects it by
+stretching a single period by one frame, which cannot be heard. These
+corrections are logged at debug level (`RUST_LOG=debug`).
 
 ### Patch bay
 
@@ -146,7 +181,7 @@ cargo run -p ua101-cli -- info     # CLI
 cargo run -p ua101-panel           # graphical panel
 ```
 
-Requires Rust 1.85 or later (1.95 for the panel). On Linux, building the
+Requires Rust 1.85 or later (1.87 for `ua101d`, 1.95 for the panel). On Linux, building the
 panel needs the `libxkbcommon`, `wayland`, `libGL` and `libX11` development
 headers.
 
@@ -159,9 +194,12 @@ crates/
   ua101-usb        driver: nusb (control, bulk) + one isochronous backend per OS
                    (Linux: usbfs), full-duplex engine with ring buffers
   ua101-cli        `ua101` binary
-  ua101-panel      `ua101-panel` binary (egui)
+  ua101-panel      `ua101-panel` binary (egui): the console, patch bay and
+                   dialogs
   ua101d           driver daemon: audio bridge to snd-aloop (pure-Rust ALSA
-                   ioctls), MIDI/mixer control, state mirror, control socket
+                   ioctls) with clock-drift correction, real-time threads
+                   through RealtimeKit, MIDI/mixer control, state mirror,
+                   control socket
 packaging/         Linux installer, udev rule, macOS bundle, Windows notes
 docs/protocol.md   USB protocol and evidence
 ```
@@ -169,12 +207,14 @@ docs/protocol.md   USB protocol and evidence
 ## Releasing
 
 ```sh
-git tag v0.1.0 && git push origin v0.1.0
+git tag -a v0.2.0 -m v0.2.0 && git push origin v0.2.0
 ```
 
 The `release.yml` workflow builds Linux (x86_64, aarch64, musl), Windows
 (`.exe`) and macOS (universal `.app` in a `.dmg`), then publishes the
-files and `SHA256SUMS` in the GitHub release.
+files and `SHA256SUMS` in the GitHub release. A tag with a suffix, such as
+`v0.3.0-beta`, is published as a pre-release, so the installer's default
+stays on the latest stable release.
 
 
 ## Legal

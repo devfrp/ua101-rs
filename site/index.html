@@ -56,11 +56,16 @@
   <div class="container stack__grid">
     <div class="stack__pane">
       <h2 id="panel-head">The control panel, rebuilt</h2>
-      <p class="lead">Decoded from Roland’s original Windows driver.</p>
+      <p class="lead">Decoded from Roland’s original Windows driver, drawn as one console.</p>
       <a class="key" href="https://github.com/devfrp/ua101-rs/tree/main/crates/ua101-panel">Panel source</a>
     </div>
 
     <div class="stack__scroll">
+      <figure class="shot">
+        <img class="capture" src="img/console.png" width="1860" height="900" alt="The ua101-panel console: INPUT MONITOR, OUTPUT MONITOR and MONITOR OUT sections with faders, LED meters and link buttons, under a header with the sample rate and the device buttons">
+        <figcaption>The whole mixer on one console that scales with the window.</figcaption>
+      </figure>
+
       <figure class="shot">
         <div class="screen" data-slot="patchbay" data-kind="product" data-alt="The ua101-panel patch bay with cables from inputs to outputs">
           <div class="screen__bar" data-keep>
@@ -100,49 +105,17 @@
             </g>
           </svg>
         </div>
-        <figcaption>Drag an input to an output: one cable, one channel.</figcaption>
+        <figcaption>The patch bay. Try it: drag an input to an output, one cable per channel.</figcaption>
       </figure>
 
       <figure class="shot">
-        <div class="screen" data-slot="faders" data-kind="product" data-alt="Input strips with faders in decibels">
-          <div class="screen__bar" data-keep><span>Input</span></div>
-          <div class="strips" data-keep>
-            <div class="strip"><span class="strip__name">1</span><output class="strip__db" for="f1">0.0 dB</output><input class="fader" id="f1" type="range" min="-60" max="6" step="0.5" value="0" aria-label="Input 1 level"></div>
-            <div class="strip"><span class="strip__name">2</span><output class="strip__db" for="f2">0.0 dB</output><input class="fader" id="f2" type="range" min="-60" max="6" step="0.5" value="0" aria-label="Input 2 level"></div>
-            <div class="strip"><span class="strip__name">3</span><output class="strip__db" for="f3">-6.0 dB</output><input class="fader" id="f3" type="range" min="-60" max="6" step="0.5" value="-6" aria-label="Input 3 level"></div>
-            <div class="strip"><span class="strip__name">4</span><output class="strip__db" for="f4">-6.0 dB</output><input class="fader" id="f4" type="range" min="-60" max="6" step="0.5" value="-6" aria-label="Input 4 level"></div>
-            <div class="strip"><span class="strip__name">5</span><output class="strip__db" for="f5">+3.0 dB</output><input class="fader" id="f5" type="range" min="-60" max="6" step="0.5" value="3" aria-label="Input 5 level"></div>
-            <div class="strip"><span class="strip__name">6</span><output class="strip__db" for="f6">Off</output><input class="fader" id="f6" type="range" min="-60" max="6" step="0.5" value="-60" aria-label="Input 6 level"></div>
-          </div>
-        </div>
-        <figcaption>Faders in dB, from off to +6 dB.</figcaption>
+        <img class="capture" src="img/strips.png" width="322" height="750" loading="lazy" alt="Four OUTPUT MONITOR strips: channel tab, MUTE and SOLO pills, pan bar, LED ladder meter beside a fader, the value in dB and the round link button">
+        <figcaption>MUTE, pan, a fader in dB and an LED meter on every strip.</figcaption>
       </figure>
 
       <figure class="shot">
-        <div class="screen" data-slot="link" data-kind="product" data-alt="Output strips with LINK and MAIN switches">
-          <div class="screen__bar" data-keep><span>Output</span></div>
-          <div class="outs" data-keep>
-            <div class="pair"><button class="pill-key" type="button" aria-pressed="true">Link 1-2</button><button class="pill-key pill-key--main" type="button" aria-pressed="true">Main 1</button><button class="pill-key pill-key--main" type="button" aria-pressed="true">Main 2</button></div>
-            <div class="pair"><button class="pill-key" type="button" aria-pressed="true">Link 3-4</button><button class="pill-key pill-key--main" type="button" aria-pressed="false">Main 3</button><button class="pill-key pill-key--main" type="button" aria-pressed="false">Main 4</button></div>
-            <div class="pair"><button class="pill-key" type="button" aria-pressed="false">Link 5-6</button><button class="pill-key pill-key--main" type="button" aria-pressed="true">Main 5</button><button class="pill-key pill-key--main" type="button" aria-pressed="false">Main 6</button></div>
-          </div>
-        </div>
-        <figcaption>Linked pairs, and MONITOR OUT per output.</figcaption>
-      </figure>
-
-      <figure class="shot">
-        <div class="screen" data-slot="device" data-kind="product" data-alt="The device panel with sample rate and status lamps">
-          <div class="screen__bar" data-keep><span>Device</span></div>
-          <div class="device" data-keep>
-            <div class="lcd"><small>Rate</small><b>44.1 kHz</b></div>
-            <div class="lcd"><small>Channels</small><b>10 out, 12 in</b></div>
-            <ul class="lamps">
-              <li><span class="lamp is-on" aria-hidden="true"></span>SOFT CTRL</li>
-              <li><span class="lamp" aria-hidden="true"></span>MONO</li>
-            </ul>
-          </div>
-        </div>
-        <figcaption>The unit’s front panel, live.</figcaption>
+        <img class="capture" src="img/header.png" width="1820" height="106" loading="lazy" alt="The header bar: UA-101, the sample rate 44.1 kHz on a green display, the CLOCK and DIRECT MONITOR lights, the ua101d status and the PATCH BAY, MEMORY and DEVICE buttons">
+        <figcaption>The sample rate and the unit’s front panel, live.</figcaption>
       </figure>
     </div>
   </div>
@@ -200,6 +173,8 @@
       <div><dt>Do I need Roland’s driver?</dt><dd>No, nothing from Roland ships here.</dd></div>
       <div><dt>Which sample rates?</dt><dd>The unit’s switch. 44.1&nbsp;kHz is verified, the others are next.</dd></div>
       <div><dt>Where does the patch bay run?</dt><dd>Inside ua101d, about 8&nbsp;ms late.</dd></div>
+      <div><dt>Does it crackle when the computer is busy?</dt><dd>No. Since 0.2.0 the audio threads run in real time through RealtimeKit.</dd></div>
+      <div><dt>Is there a driver for Apple silicon Macs?</dt><dd>Audio on macOS is in progress here. <a href="https://github.com/delta90h/ua101-mac">delta90h/ua101-mac</a> has one validated on M1 and later.</dd></div>
     </dl>
   </div>
 </section>
@@ -216,11 +191,11 @@
       <table class="files">
         <thead><tr><th scope="col">File</th><th scope="col">For</th><th scope="col" class="num">Size</th></tr></thead>
         <tbody>
-          <tr><td><a href="https://github.com/devfrp/ua101-rs/releases/latest/download/ua101-linux-x86_64.tar.gz"><code>ua101-linux-x86_64.tar.gz</code></a></td><td>Linux</td><td class="num">6.1&nbsp;MB</td></tr>
-          <tr><td><a href="https://github.com/devfrp/ua101-rs/releases/latest/download/ua101-linux-aarch64.tar.gz"><code>ua101-linux-aarch64.tar.gz</code></a></td><td>Linux on ARM</td><td class="num">5.6&nbsp;MB</td></tr>
-          <tr><td><a href="https://github.com/devfrp/ua101-rs/releases/latest/download/ua101-linux-x86_64-musl.tar.gz"><code>ua101-linux-x86_64-musl.tar.gz</code></a></td><td>Alpine, no panel</td><td class="num">2.1&nbsp;MB</td></tr>
-          <tr><td><a href="https://github.com/devfrp/ua101-rs/releases/latest/download/ua101-panel-windows-x86_64.exe"><code>ua101-panel-windows-x86_64.exe</code></a></td><td>Windows panel</td><td class="num">7.8&nbsp;MB</td></tr>
-          <tr><td><a href="https://github.com/devfrp/ua101-rs/releases/latest/download/ua101-macos-universal.dmg"><code>ua101-macos-universal.dmg</code></a></td><td>macOS panel</td><td class="num">8.8&nbsp;MB</td></tr>
+          <tr><td><a href="https://github.com/devfrp/ua101-rs/releases/latest/download/ua101-linux-x86_64.tar.gz"><code>ua101-linux-x86_64.tar.gz</code></a></td><td>Linux</td><td class="num">6.8&nbsp;MB</td></tr>
+          <tr><td><a href="https://github.com/devfrp/ua101-rs/releases/latest/download/ua101-linux-aarch64.tar.gz"><code>ua101-linux-aarch64.tar.gz</code></a></td><td>Linux on ARM</td><td class="num">6.2&nbsp;MB</td></tr>
+          <tr><td><a href="https://github.com/devfrp/ua101-rs/releases/latest/download/ua101-linux-x86_64-musl.tar.gz"><code>ua101-linux-x86_64-musl.tar.gz</code></a></td><td>Alpine, no panel</td><td class="num">2.8&nbsp;MB</td></tr>
+          <tr><td><a href="https://github.com/devfrp/ua101-rs/releases/latest/download/ua101-panel-windows-x86_64.exe"><code>ua101-panel-windows-x86_64.exe</code></a></td><td>Windows panel</td><td class="num">7.5&nbsp;MB</td></tr>
+          <tr><td><a href="https://github.com/devfrp/ua101-rs/releases/latest/download/ua101-macos-universal.dmg"><code>ua101-macos-universal.dmg</code></a></td><td>macOS panel</td><td class="num">8.6&nbsp;MB</td></tr>
         </tbody>
       </table>
     </div>

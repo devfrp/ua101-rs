@@ -1,4 +1,4 @@
-// ua101-rs site: copy keys, the working patch bay, faders and switches.
+// ua101-rs site: copy keys and the working patch bay.
 // Without script the page is complete: the patch bay shows its two cables.
 
 const SVG = 'http://www.w3.org/2000/svg';
@@ -154,20 +154,3 @@ if (patch) {
   });
   render();
 }
-
-// ---------- faders ----------
-document.querySelectorAll('.fader').forEach((f) => {
-  const out = document.querySelector(`output[for="${f.id}"]`);
-  const show = () => {
-    const v = Number(f.value);
-    out.textContent = v <= -60 ? 'Off' : `${v > 0 ? '+' : ''}${v.toFixed(1)} dB`;
-  };
-  f.addEventListener('input', show);
-  f.addEventListener('dblclick', () => { f.value = 0; show(); });
-  show();
-});
-
-// ---------- link and main switches ----------
-document.querySelectorAll('.outs .pill-key').forEach((b) => {
-  b.addEventListener('click', () => b.setAttribute('aria-pressed', String(b.getAttribute('aria-pressed') !== 'true')));
-});
