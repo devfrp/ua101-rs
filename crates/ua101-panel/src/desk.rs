@@ -31,6 +31,9 @@ const STRIP_H: f32 = FADER_TOP + FADER_H + 54.0;
 const CARD_H: f32 = TITLE_H + STRIP_H + 6.0;
 const DESK_H: f32 = CARD_TOP + CARD_H + MARGIN;
 const SECTIONS: [Bus; 3] = [Bus::Input, Bus::Output, Bus::MonitorOut];
+/// First capture channel of the monitor mix (MAIN), 0-based: capture
+/// channels 11-12 follow the mix (observed, see docs/protocol.md).
+const MAIN_CAPTURE: usize = 10;
 /// Segments of the LED ladder meter, -60 to 0 dBFS.
 const LADDER: usize = 24;
 
@@ -681,7 +684,15 @@ impl Panel {
                     Bus::Input if daemon_meters => Some(self.levels_in.get(ch).copied()),
                     Bus::Output if daemon_meters => Some(self.levels_out.get(ch).copied()),
                     Bus::Input => self.meters.as_ref().map(|m| Some(m.level(ch))),
-                    _ => None,
+                    // Capture channels 11-12 carry the monitor mix (MAIN).
+                    Bus::MonitorOut if daemon_meters => {
+                        Some(self.levels_in.get(MAIN_CAPTURE + ch).copied())
+                    }
+                    Bus::MonitorOut => self
+                        .meters
+                        .as_ref()
+                        .map(|m| Some(m.level(MAIN_CAPTURE + ch))),
+                    Bus::Output => None,
                 }
                 .map(|l| l.unwrap_or(0.0));
                 ladder(ui, g, cx - 17.0, ftop, level, &mut self.holds[global + ch]);

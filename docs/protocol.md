@@ -111,6 +111,19 @@ floor around −102 dBFS RMS with nothing connected, inputs 9–10 are digital
 silence, and channels 11–12 sit near −134 dBFS. After the stream stopped,
 the kernel driver re-attached and ALSA listed the card again.
 
+### Capture channels 11–12: the monitor mix (observed, device, 2026-11-27)
+
+With inputs 1–10 silent (peak 0.0000 on every channel for 15 s) and an
+application playing on outputs 1–2, the peak levels `ua101d` measures on
+capture channels 11 and 12 followed outputs 1 and 2: correlation 0.66
+and 0.71 over 247 readings at about 20 per second, around 12 dB below
+the output peaks. Channels 11–12 therefore carry the monitor mix (MAIN),
+as on the UA-1000. The panel meters MONITOR OUT from them.
+
+Not verified: whether the tap is before or after the MONITOR OUT faders
+(the −12 dB offset was not explained), and whether the inputs reach it
+through INPUT MONITOR.
+
 Not yet verified on hardware: audible playback, the playback/capture
 pairing and the 48/88.2/96 kHz positions.
 
