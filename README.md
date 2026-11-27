@@ -65,6 +65,8 @@ Download `ua101-macos-universal.dmg` (Intel + Apple Silicon) and drag
 time, right-click it and choose *Open*, or run
 `xattr -dr com.apple.quarantine "/Applications/UA-101 Panel.app"`.
 
+For validate version for Mac M1 and later, please refeer to https://github.com/delta90h/ua101-mac; thanks to @deltah90h for his version
+
 ## The driver daemon (Linux)
 
 `ua101d` plays the role of Roland's Windows driver. It owns the unit, runs
@@ -173,6 +175,7 @@ git tag v0.1.0 && git push origin v0.1.0
 The `release.yml` workflow builds Linux (x86_64, aarch64, musl), Windows
 (`.exe`) and macOS (universal `.app` in a `.dmg`), then publishes the
 files and `SHA256SUMS` in the GitHub release.
+
 
 ## Legal
 
